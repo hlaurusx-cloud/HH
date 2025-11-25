@@ -157,7 +157,8 @@ elif st.session_state.step == 1:
         # 다음 단계 안내
         st.divider()
         st.info("📊 데이터 탐색을 위해 왼쪽 사이드바에서 **「데이터 시각화」** 단계로 이동하세요")
-        
+
+
 # ----------------------
 # 단계 2：데이터 시각화（新增！히스토그램 기능 추가）
 # ----------------------
@@ -325,15 +326,10 @@ elif st.session_state.step == 2:
                     
                     # 기존 통계 정보
                     st.markdown("### 📋 통계 정보")
-                    # agg 대신 describe()를 사용하여 안전하게 통계량 추출
-                    stats_desc = plot_df.groupby(x_var)[y_var].describe()
-                    
-                    # 필요한 열만 선택 및 순서 정렬
-                    stats_df = stats_desc[["count", "mean", "std", "min", "25%", "50%", "75%", "max"]].round(3)
-                    
-                    # 한국어 컬럼명 변경
+                    stats_df = plot_df.groupby(x_var)[y_var].agg([
+                        "count", "mean", "std", "min", "25%", "50%", "75%", "max"
+                    ]).round(3)
                     stats_df.columns = ["데이터 개수", "평균값", "표준편차", "최소값", "제1사분위수", "중앙값", "제3사분위수", "최대값"]
-                    
                     st.dataframe(stats_df, use_container_width=True)
                 
                 except Exception as e:
@@ -346,254 +342,126 @@ elif st.session_state.step == 2:
         st.info("🔧 데이터 전처리를 위해 왼쪽 사이드바에서「데이터 전처리」단계로 이동하세요")
 
 # ----------------------
-# 3. 데이터 전처리（Step 3） - 컬럼명 중복/MultiIndex 오류 해결 버전
+# 단계 3：데이터 전처리（修复 selectbox 错误 + continue 语法错误）
 # ----------------------
 elif st.session_state.step == 3:
-    st.subheader("🛠 데이터 전처리 및 변수 선택 (Smart Stepwise)")
+    st.subheader("🧹 데이터 전처리")
     
-    # 1. 원본 데이터 로드
-    df_raw = st.session_state.data["merged"]
-    if df_raw is None:
-        st.error("데이터가 없습니다. Step 1에서 데이터를 업로드하세요.")
-        st.stop()
-
-    # [오류 해결 핵심] 컬럼명 정리 (중복 제거 및 MultiIndex 병합)
-    # 1) MultiIndex(여러 줄 헤더)일 경우 하나로 합치기
-    if isinstance(df_raw.columns, pd.MultiIndex):
-        st.warning("⚠️ 다중 헤더(MultiIndex)가 감지되어 단일 헤더로 병합합니다.")
-        df_raw.columns = ['_'.join(map(str, col)).strip() for col in df_raw.columns.values]
-    
-    # 2) 컬럼명 중복 제거 (예: A, A -> A, A_1)
-    if df_raw.columns.has_duplicates:
-        st.warning("⚠️ 중복된 컬럼명이 감지되어 이름을 변경합니다 (예: Col -> Col_1).")
-        new_columns = []
-        seen = {}
-        for col in df_raw.columns:
-            col_str = str(col)
-            if col_str in seen:
-                seen[col_str] += 1
-                new_columns.append(f"{col_str}_{seen[col_str]}")
+    if st.session_state.data["merged"] is None:
+        st.warning("먼저「데이터 업로드」단계를 완료하세요")
+    else:
+        df_merged = st.session_state.data["merged"]
+        
+        # 1. 데이터 개요（결측값、데이터 유형）
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("### 데이터 기본 정보")
+            st.write(f"총 데이터 양：{len(df_merged):,} 행 × {len(df_merged.columns)} 열")
+            st.write("데이터 유형 분포：")
+            st.dataframe(df_merged.dtypes.value_counts().reset_index(), use_container_width=True)
+        
+        with col2:
+            st.markdown("### 결측값 분포")
+            missing_info = df_merged.isnull().sum()[df_merged.isnull().sum() > 0].reset_index()
+            missing_info.columns = ["필드명", "결측값 개수"]
+            if len(missing_info) > 0:
+                st.dataframe(missing_info, use_container_width=True)
+                fig_missing = px.imshow(df_merged.isnull(), color_continuous_scale="Reds", title="결측값 히트맵")
+                st.plotly_chart(fig_missing, use_container_width=True)
             else:
-                seen[col_str] = 0
-                new_columns.append(col_str)
-        df_raw.columns = new_columns
-        # 정리된 데이터 세션에 다시 저장
-        st.session_state.data["merged"] = df_raw
-
-    # -------------------------------------------------------
-    # [1] 타겟 변수 우선 선택 (스마트 필터링 적용)
-    # -------------------------------------------------------
-    st.markdown("### 1️⃣ 타겟 변수(예측 목표) 설정")
-    
-    # 타겟 후보군 필터링 (ID나 상수 제외)
-    target_candidates = []
-    dropped_candidates = [] 
-
-    for col in df_raw.columns:
-        # 조건 1: 모든 값이 다 다른 경우 (ID일 확률 높음) -> 50행 이상일 때만 체크
-        if len(df_raw) > 50 and df_raw[col].nunique() == len(df_raw):
-            dropped_candidates.append(col)
-            continue
-        # 조건 2: 값이 하나밖에 없는 경우 (상수)
-        if df_raw[col].nunique() <= 1:
-            dropped_candidates.append(col)
-            continue
-        target_candidates.append(col)
-    
-    # 만약 필터링 결과 남은게 없으면 원본 전체 사용
-    if not target_candidates:
-        target_candidates = df_raw.columns.tolist()
-
-    # 세션 상태 초기화
-    if "target_col_temp" not in st.session_state:
-        st.session_state.target_col_temp = target_candidates[0]
-    
-    # 이전에 선택한 타겟이 목록에 없으면 리셋
-    if st.session_state.target_col_temp not in target_candidates:
-         st.session_state.target_col_temp = target_candidates[0]
-
-    col_t1, col_t2 = st.columns([2, 1])
-    with col_t1:
-        target_col = st.selectbox(
-            "예측할 타겟 컬럼 선택", 
-            options=target_candidates,
-            index=target_candidates.index(st.session_state.target_col_temp),
-            key="target_selector"
-        )
-    with col_t2:
-        if dropped_candidates:
-            with st.popover("🗑 제외된 컬럼 보기"):
-                st.write("ID 또는 상수로 판단되어 목록에서 제외됨:")
-                st.write(dropped_candidates)
-
-    st.session_state.target_col_temp = target_col
-    st.session_state.preprocess["target_col"] = target_col
-
-    st.divider()
-
-    # -------------------------------------------------------
-    # [2] 스마트 변수 선택 (Stepwise)
-    # -------------------------------------------------------
-    st.markdown("### 2️⃣ 변수 선택 (Stepwise)")
-    
-    # 선택된 변수 리스트 초기화
-    if "selected_features_temp" not in st.session_state:
-        st.session_state.selected_features_temp = [c for c in target_candidates if c != target_col]
-
-    col_tool1, col_tool2 = st.columns([1, 3])
-    
-    with col_tool1:
-        st.write("") 
-        if st.button("🤖 AI 스마트 변수 선택\n(Stepwise 실행)", type="primary", use_container_width=True):
-            with st.spinner("데이터 분석 중..."):
-                try:
-                    # 분석용 임시 데이터 복사
-                    temp_df = df_raw.copy()
-                    
-                    # 1. 수치형 처리: NaN을 0으로 채움
-                    num_temp = temp_df.select_dtypes(include=[np.number]).columns
-                    if len(num_temp) > 0:
-                        temp_df[num_temp] = temp_df[num_temp].fillna(0)
-                    
-                    # 2. 범주형 처리: NaN을 "unknown"으로 채우고 숫자 변환
-                    cat_temp = temp_df.select_dtypes(exclude=[np.number]).columns
-                    for c in cat_temp:
-                        # 컬럼명 안전하게 처리 (문자열 변환)
-                        temp_df[c] = temp_df[c].fillna("unknown").astype(str)
-                        temp_df[c] = pd.factorize(temp_df[c])[0]
-                    
-                    # 3. X, y 분리
-                    X_temp = temp_df.drop(columns=[target_col], errors='ignore')
-                    # X에서도 유효한 컬럼만 남김
-                    valid_features = [c for c in X_temp.columns if c in target_candidates]
-                    X_temp = X_temp[valid_features]
-
-                    y_temp = temp_df[target_col]
-                    
-                    # 4. 모델 중요도 산출
-                    from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-                    from sklearn.feature_selection import SelectFromModel
-
-                    is_classification = False
-                    if st.session_state.task == "logit":
-                        is_classification = True
-                    # 타겟 값의 종류가 적거나 문자열이면 분류로 간주
-                    elif y_temp.dtype == 'object' or len(y_temp.unique()) < 20:
-                        is_classification = True
-                    
-                    if is_classification:
-                        model_sel = RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=-1)
-                        if y_temp.dtype == 'object': 
-                             y_temp = pd.factorize(y_temp)[0]
-                    else:
-                        model_sel = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)
-
-                    model_sel.fit(X_temp, y_temp)
-                    
-                    # 5. 중요도 평균 이상인 변수 선택
-                    selector = SelectFromModel(model_sel, prefit=True, threshold="mean")
-                    selected_indices = selector.get_support(indices=True)
-                    recommended_features = X_temp.columns[selected_indices].tolist()
-                    
-                    st.session_state.selected_features_temp = recommended_features
-                    st.success(f"✅ 분석 완료! {len(recommended_features)}개 중요 변수 선택됨.")
-                    st.rerun()
-
-                except Exception as e:
-                    st.error(f"분석 오류 발생: {str(e)}")
-                    st.write("힌트: 데이터의 컬럼명이 중복되었거나 비정상적인 값이 있을 수 있습니다.")
-
-    with col_tool2:
-        # 멀티 셀렉트 박스
-        feature_options = [c for c in target_candidates if c != target_col]
+                st.success("결측값이 없습니다！")
         
-        feature_cols = st.multiselect(
-            "분석에 사용할 변수 (자동 선택됨)",
-            options=feature_options,
-            default=[c for c in st.session_state.selected_features_temp if c in feature_options],
-            key="feature_multiselect"
-        )
-
-    if not feature_cols:
-        st.warning("⚠️ 최소한 하나의 변수는 선택해야 합니다.")
-        st.stop()
+        # 2. 전처리 설정（修复 selectbox 错误）
+        st.divider()
+        st.markdown("### 전처리 매개변수 설정")
         
-    st.session_state.preprocess["feature_cols"] = feature_cols
-    
-    # -------------------------------------------------------
-    # [3] 전처리 상세 설정
-    # -------------------------------------------------------
-    st.divider()
-    with st.expander("⚙️ 고급 전처리 설정 (결측치/인코딩)", expanded=False):
-        col_opt1, col_opt2 = st.columns(2)
-        with col_opt1:
-            impute_strategy = st.selectbox("결측치 처리", ["중앙값(Median)", "평균값(Mean)", "0으로 채우기", "최빈값(Mode)"])
-        with col_opt2:
-            cat_encoding = st.selectbox("인코딩 방식", ["Label Encoding", "One-Hot Encoding"])
-
-    strategy_map = {"중앙값(Median)": "median", "평균값(Mean)": "mean", "0으로 채우기": "constant", "최빈값(Mode)": "most_frequent"}
-    
-    # -------------------------------------------------------
-    # [4] 전처리 실행
-    # -------------------------------------------------------
-    st.divider()
-    if st.button("🚀 전처리 실행 및 데이터 생성", type="primary", use_container_width=True):
-        try:
-            final_cols = feature_cols + [target_col]
-            df_final = df_raw[final_cols].copy()
+        # 타겟 열 선택（예측 변수）- 核心修复：index=0（默认第一个列），增加有效性校验
+        if len(df_merged.columns) > 0:
+            target_col = st.selectbox(
+                "타겟 열 선택（예측할 변수）", 
+                options=df_merged.columns, 
+                index=0  # 修复：默认选择第一个列，而非 -1
+            )
+            st.session_state.preprocess["target_col"] = target_col
+        else:
+            st.error("데이터에 열이 존재하지 않습니다！올바른 데이터 파일을 업로드하세요")
+            st.stop()
+        
+        # 특징 열 선택（타겟 열과 무관한 열 제외）
+        exclude_cols = st.multiselect(
+            "제외할 열 선택（예：ID、무관한 필드）", 
+            options=[col for col in df_merged.columns if col != target_col]
+        )
+        feature_cols = [col for col in df_merged.columns if col not in exclude_cols + [target_col]]
+        
+        # 特征列有效性校验
+        if not feature_cols:
+            st.warning("특징 열이 선택되지 않았습니다！제외할 열을 조정하세요")
+        st.session_state.preprocess["feature_cols"] = feature_cols
+        
+        # 결측값 처리
+        st.markdown("#### 결측값 처리")
+        impute_strategy = st.selectbox("수치형 결측값 채우기 방식", options=["중앙값", "평균값", "최빈값"], index=0)
+        impute_strategy_map = {"중앙값": "median", "평균값": "mean", "최빈값": "most_frequent"}
+        
+        # 범주형 특징 인코딩
+        st.markdown("#### 범주형 특징 인코딩")
+        cat_encoding = st.selectbox("범주형 특징 인코딩 방식", options=["레이블 인코딩（LabelEncoder）", "원-핫 인코딩（OneHotEncoder）"], index=0)
+        
+        # 3. 전처리 실행（修复 continue 语法错误：替换为 st.stop()）
+        if st.button("전처리 시작"):
+            if not feature_cols:
+                st.error("전처리 실패：특징 열이 없습니다！")
+                st.stop()  # 修复：用 st.stop() 替代 continue，停止后续代码执行
             
-            X = df_final[feature_cols]
-            y = df_final[target_col]
-
-            num_cols = X.select_dtypes(include=[np.number]).columns
-            cat_cols = X.select_dtypes(exclude=[np.number]).columns
-
-            imputer_args = {"strategy": strategy_map[impute_strategy]}
-            if strategy_map[impute_strategy] == "constant":
-                imputer_args["fill_value"] = 0
+            try:
+                X = df_merged[feature_cols].copy()
+                y = df_merged[target_col].copy()
                 
-            imputer = SimpleImputer(**imputer_args)
-            
-            # 수치형 처리
-            if len(num_cols) > 0:
+                # 수치형과 범주형 특징 분리
+                num_cols = X.select_dtypes(include=["int64", "float64"]).columns
+                cat_cols = X.select_dtypes(include=["object", "category"]).columns
+                
+                # 수치형 전처리：결측값 채우기 + 표준화
+                imputer = SimpleImputer(strategy=impute_strategy_map[impute_strategy])
                 X[num_cols] = imputer.fit_transform(X[num_cols])
+                
                 scaler = StandardScaler()
                 X[num_cols] = scaler.fit_transform(X[num_cols])
-            else:
-                scaler = None
+                
+                # 범주형 전처리：결측값 채우기 + 인코딩
+                encoders = {}
+                for col in cat_cols:
+                    # 범주형 결측값을 "알 수 없음"으로 채우기
+                    X[col] = X[col].fillna("알 수 없음").astype(str)
+                    
+                    if cat_encoding == "레이블 인코딩（LabelEncoder）":
+                        le = LabelEncoder()
+                        X[col] = le.fit_transform(X[col])
+                        encoders[col] = le
+                    else:  # 원-핫 인코딩
+                        ohe = OneHotEncoder(sparse_output=False, drop="first")
+                        ohe_result = ohe.fit_transform(X[[col]])
+                        ohe_cols = [f"{col}_{cat}" for cat in ohe.categories_[0][1:]]  # 첫 번째 범주 제외（다중공선성 방지）
+                        X = pd.concat([X.drop(col, axis=1), pd.DataFrame(ohe_result, columns=ohe_cols)], axis=1)
+                        encoders[col] = (ohe, ohe_cols)
+                
+                # 전처리组件 저장
+                st.session_state.preprocess["imputer"] = imputer
+                st.session_state.preprocess["scaler"] = scaler
+                st.session_state.preprocess["encoders"] = encoders
+                st.session_state.preprocess["feature_cols"] = list(X.columns)  # 업데이트된 특징 열（원-핫 인코딩 열 포함）
+                
+                # 전처리된 데이터 저장
+                st.session_state.data["X_processed"] = X
+                st.session_state.data["y_processed"] = y
+                
+                st.success("데이터 전처리 완료！")
+                st.markdown(f"전처리 후 특징 수：{len(X.columns)}")
+                st.dataframe(X.head(3), use_container_width=True)
+            except Exception as e:
+                st.error(f"전처리 실패：{str(e)}")
 
-            # 범주형 처리
-            encoders = {}
-            for col in cat_cols:
-                X[col] = X[col].fillna("unknown").astype(str)
-                if "Label" in cat_encoding:
-                    le = LabelEncoder()
-                    X[col] = le.fit_transform(X[col])
-                    encoders[col] = le
-                else:
-                    ohe = OneHotEncoder(sparse_output=False, drop="first", handle_unknown='ignore')
-                    ohe_data = ohe.fit_transform(X[[col]])
-                    # 컬럼명 생성 시 특수문자 제거 등 안전장치
-                    new_cols = [f"{col}_{str(c).replace(' ', '_')}" for c in ohe.categories_[0][1:]]
-                    X_ohe = pd.DataFrame(ohe_data, columns=new_cols, index=X.index)
-                    X = pd.concat([X.drop(columns=[col]), X_ohe], axis=1)
-                    encoders[col] = (ohe, new_cols)
-
-            st.session_state.preprocess["imputer"] = imputer
-            st.session_state.preprocess["scaler"] = scaler
-            st.session_state.preprocess["encoders"] = encoders
-            st.session_state.preprocess["feature_cols"] = list(X.columns)
-            
-            st.session_state.data["X_processed"] = X
-            st.session_state.data["y_processed"] = y
-            
-            st.success("데이터 전처리 완료!")
-            st.dataframe(X.head(3), use_container_width=True)
-
-        except Exception as e:
-            st.error(f"전처리 최종 실행 오류: {e}")
-            
-            
 # ----------------------
 # 단계 4：모델 학습（修复 stratify 参数错误）
 # ----------------------
@@ -676,79 +544,140 @@ elif st.session_state.step == 4:
                 except Exception as e:
                     st.error(f"모델 학습 실패：{str(e)}")
 
-# -------------------------- 단계 5: 혼합 모델 예측 (완성 버전)--------------------------
-def predict(input_data):
-    """
-    혼합 모델 예측 함수: 선형 회귀와 의사결정 트리의 예측 결과를 가중치에 따라 융합
-    input_data: 전처리가 완료된 입력 데이터 (DataFrame)
-    return: 최종 혼합 예측 결과, 예측 확률 (분류 작업 시 유효, 회귀 작업 시 None)
-    """
-    # 1. 모델 학습 시 사용한 특징 열 추출 (session_state에서 가져오기, 특징 차원 불일치 방지)
-    feature_cols = st.session_state.get("feature_cols", [])
-    if not feature_cols:
-        st.error("특징 열을 찾을 수 없습니다! 먼저 모델 학습을 완료해주세요")
-        return None, None
+# ----------------------
+# 단계 5：모델 예측（단일/일괄 업로드）
+# ----------------------
+elif st.session_state.step == 5:
+    st.subheader("🎯 모델 예측")
     
-    # 입력 데이터에서 학습 시 사용한 특징만 남기기 (차원 오류 방지)
-    X = input_data[feature_cols].copy()
-    
-    # 2. session_state에서 학습 완료된 모델과 가중치 로드 (이전 학습 단계에서 저장한 값)
-    models = st.session_state.get("models", {})
-    if not models or "regression" not in models or "decision_tree" not in models:
-        st.error("모델이 학습되지 않았습니다! 먼저 모델 학습 단계를 완료해주세요")
-        return None, None
-    
-    # 3. 두 모델의 융합 가중치 가져오기 (이전 학습 단계에서 session_state에 저장)
-    reg_weight = models["mixed_weights"]["regression"]  # 선형 회귀 가중치
-    dt_weight = models["mixed_weights"]["decision_tree"]  # 의사결정 트리 가중치
-    
-    # 4. 두 모델로 각각 예측 (분류/회귀 작업 구분)
-    if st.session_state.task == "logit":  # 👉 분류 작업 (예측 확률 + 클래스)
-        # 분류 모델은 확률 반환 (predict_proba): 2번째 열(인덱스 1)을 양성 클래스 확률로 사용
-        reg_prob = models["regression"].predict_proba(X)[:, 1]  # 선형 회귀 양성 클래스 확률
-        dt_prob = models["decision_tree"].predict_proba(X)[:, 1]  # 의사결정 트리 양성 클래스 확률
-        
-        # 가중치에 따른 확률 융합 (가중 평균)
-        mixed_prob = reg_weight * reg_prob + dt_weight * dt_prob
-        # 확률을 클래스로 변환 (임계값 0.5, 필요에 따라 조정 가능)
-        mixed_pred = (mixed_prob > 0.5).astype(int)
-        
-        # 반환: 예측 클래스 (0/1), 예측 확률 (0-1)
-        return mixed_pred, mixed_prob
-    
-    else:  # 👉 회귀 작업 (연속값 예측)
-        # 회귀 모델은 직접 예측값 반환 (predict)
-        reg_pred = models["regression"].predict(X)  # 선형 회귀 예측값
-        dt_pred = models["decision_tree"].predict(X)  # 의사결정 트리 예측값
-        
-        # 가중치에 따른 예측값 융합 (가중 평균)
-        mixed_pred = reg_weight * reg_pred + dt_weight * dt_pred
-        
-        # 회귀 작업은 확률이 없으므로, 예측값과 None 반환
-        return mixed_pred, None
-
-
-# -------------------------- (선택 사항) 예측 결과 호출 예시 (UI 로직에 맞게 조정)--------------------------
-# UI에서 예측을触发하려면 아래 로직을 추가/수정하세요 (기존 버튼과 흐름에 맞춰调整)
-if "models" in st.session_state and st.button("예측 시작"):
-    # 전처리가 완료된 데이터 가져오기 (실제 전처리 후 데이터 변수명으로替换)
-    input_data = st.session_state.get("preprocessed_data", None)
-    if input_data is not None and not input_data.empty:
-        pred_result, pred_prob = predict(input_data)
-        
-        # 예측 결과 표시 (작업 유형에 맞게调整)
-        st.subheader("예측 결과")
-        if st.session_state.task == "logit":
-            # 분류 결과: 예측 클래스 + 양성 클래스 확률 표시
-            input_data["예측 클래스"] = pred_result
-            input_data["양성 클래스 확률"] = pred_prob.round(3)
-            st.dataframe(input_data[["예측 클래스", "양성 클래스 확률"] + feature_cols], use_container_width=True)
-        else:
-            # 회귀 결과: 예측값 표시
-            input_data["예측값"] = pred_result.round(3)
-            st.dataframe(input_data[["예측값"] + feature_cols], use_container_width=True)
+    # 모델 학습 완료 여부 확인
+    if st.session_state.models["regression"] is None or st.session_state.models["decision_tree"] is None:
+        st.warning("먼저「모델 학습」단계를 완료하세요")
     else:
-        st.warning("먼저 데이터를 업로드하고 전처리를 완료해주세요!")
+        # 예측 함수（전처리 로직 재사용 + 新模型适配）
+        def predict(input_data):
+            X = input_data.copy()
+            preprocess = st.session_state.preprocess
+            num_cols = X.select_dtypes(include=["int64", "float64"]).columns
+            cat_cols = X.select_dtypes(include=["object", "category"]).columns
+            
+            # 수치형 전처리
+            X[num_cols] = preprocess["imputer"].transform(X[num_cols])
+            X[num_cols] = preprocess["scaler"].transform(X[num_cols])
+            
+            # 범주형 전처리
+            for col in cat_cols:
+                X[col] = X[col].fillna("알 수 없음").astype(str)
+                encoder = preprocess["encoders"][col]
+                
+                if isinstance(encoder, LabelEncoder):
+                    # 미본적 범주 처리
+                    X[col] = X[col].replace([x for x in X[col].unique() if x not in encoder.classes_], "알 수 없음")
+                    if "알 수 없음" not in encoder.classes_:
+                        encoder.classes_ = np.append(encoder.classes_, "알 수 없음")
+                    X[col] = encoder.transform(X[col])
+                else:  # OneHotEncoder
+                    ohe, ohe_cols = encoder
+                    ohe_result = ohe.transform(X[[col]])
+                    X = pd.concat([X.drop(col, axis=1), pd.DataFrame(ohe_result, columns=ohe_cols)], axis=1)
+            
+            # 특징 열 순서 일치 보장
+            X = X[preprocess["feature_cols"]]
+            
+            # 하이브리드모형 예측（가중融合）
+            reg_weight = st.session_state.models["mixed_weights"]["regression"]
+            dt_weight = st.session_state.models["mixed_weights"]["decision_tree"]
+            reg_model = st.session_state.models["regression"]
+            dt_model = st.session_state.models["decision_tree"]
+            
+            if st.session_state.task == "logit":  # 분류 예측
+                reg_proba = reg_model.predict_proba(X)[:, 1]  # 로지스틱 회귀 확률
+                dt_proba = dt_model.predict_proba(X)[:, 1]    # 의사결정나무 확률
+                mixed_proba = reg_weight * reg_proba + dt_weight * dt_proba
+                pred = (mixed_proba >= 0.5).astype(int)
+                return pred, mixed_proba
+            else:  # 회귀 예측
+                reg_pred = reg_model.predict(X)  # 선형 회귀 예측값
+                dt_pred = dt_model.predict(X)    # 의사결정나무 예측값
+                mixed_pred = reg_weight * reg_pred + dt_weight * dt_pred
+                return mixed_pred, None
+        
+        # 예측 방식 선택
+        predict_mode = st.radio("예측 방식", options=["단일 데이터 입력", "일괄 업로드 CSV"])
+        
+        # 단일 입력 예측
+        if predict_mode == "단일 데이터 입력":
+            st.markdown("#### 단일 데이터 입력（특징값을 입력하세요）")
+            feature_cols = st.session_state.preprocess["feature_cols"]
+            input_data = {}
+            
+            # 특징 유형에 따라 동적으로 입력 폼 생성
+            with st.form("single_pred_form"):
+                cols = st.columns(3)
+                for i, col in enumerate(feature_cols[:9]):  # 최대 9개 특징 표시（화면 혼잡 방지）
+                    with cols[i % 3]:
+                        # 특징 유형 판단（수치/범주）
+                        if col in st.session_state.data["X_processed"].select_dtypes(include=["int64", "float64"]).columns:
+                            input_data[col] = st.number_input(col, value=0.0)
+                        else:
+                            # 범주형 특징：학습集中의 고유값을 옵션으로 제시
+                            unique_vals = st.session_state.data["X_processed"][col].unique()[:10]  # 최대 10개 옵션
+                            input_data[col] = st.selectbox(col, options=unique_vals)
+                
+                # 예측 제출
+                submit_btn = st.form_submit_button("예측 시작")
+            
+            if submit_btn:
+                input_df = pd.DataFrame([input_data])
+                pred, proba = predict(input_df)
+                
+                st.divider()
+                st.markdown("### 예측 결과")
+                if st.session_state.task == "logit":
+                    st.metric("예측 결과", "양성" if pred[0] == 1 else "음성")
+                    st.metric("양성 확률", f"{proba[0]:.3f}" if proba is not None else "-")
+                else:  # 의사결정나무（회귀）
+                    st.metric("예측 결과", f"{pred[0]:.2f}")
+        
+        # 일괄 업로드 예측
+        else:
+            st.markdown("#### 일괄 업로드 CSV 예측")
+            uploaded_file = st.file_uploader("특징 열을 포함한 CSV 파일 업로드", type=["csv"])
+            
+            if uploaded_file is not None:
+                batch_df = pd.read_csv(uploaded_file)
+                st.metric("업로드 데이터 양", f"{len(batch_df):,} 행")
+                st.dataframe(batch_df.head(3), use_container_width=True)
+                
+                # 특징 열 일치 확인
+                required_features = st.session_state.preprocess["feature_cols"]
+                missing_features = [col for col in required_features if col not in batch_df.columns]
+                if missing_features:
+                    st.warning(f"업로드된 파일에 필요한 특징 열이 없습니다：{', '.join(missing_features)}")
+                else:
+                    if st.button("일괄 예측 시작"):
+                        with st.spinner("예측 중..."):
+                            pred, proba = predict(batch_df)
+                            batch_df["하이브리드모형 예측 결과"] = pred
+                            if proba is not None:
+                                batch_df["양성 확률"] = proba.round(3)
+                            
+                            st.divider()
+                            st.markdown("### 일괄 예측 결과")
+                            st.dataframe(
+                                batch_df[["하이브리드모형 예측 결과"] + (["양성 확률"] if proba is not None else []) + feature_cols[:3]],
+                                use_container_width=True
+                            )
+                            
+                            # 결과 다운로드
+                            csv = batch_df.to_csv(index=False, encoding="utf-8-sig")
+                            st.download_button(
+                                label="예측 결과 다운로드",
+                                data=csv,
+                                file_name="하이브리드모형_일괄예측결과.csv",
+                                mime="text/csv"
+                            )
+
 # ----------------------
 # 단계 6：성능 평가（하이브리드모형 vs 단일 모형）
 # ----------------------

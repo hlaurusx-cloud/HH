@@ -20,64 +20,6 @@ warnings.filterwarnings("ignore")
 # 페이지 설정
 st.set_page_config(page_title="하이브리드모형 프레임워크", layout="wide")
 
-# ----------------------
-# [수정 1] 초기화: Session State 설정 (필수)
-# ----------------------
-if "step" not in st.session_state:
-    st.session_state.step = 0
-
-if "data" not in st.session_state:
-    st.session_state.data = {
-        "merged": None, "X_processed": None, "y_processed": None,
-        "X_train": None, "X_test": None, "y_train": None, "y_test": None
-    }
-
-if "preprocess" not in st.session_state:
-    st.session_state.preprocess = {
-        "target_col": None, "feature_cols": [], 
-        "imputer": None, "scaler": None, "encoders": {}
-    }
-
-if "models" not in st.session_state:
-    st.session_state.models = {
-        "regression": None, "decision_tree": None,
-        "mixed_weights": {"regression": 0.5, "decision_tree": 0.5}
-    }
-
-if "task" not in st.session_state:
-    st.session_state.task = "logit"  # 기본값
-
-# ----------------------
-# [수정 2] 사이드바: 단계 이동 네비게이션
-# ----------------------
-with st.sidebar:
-    st.title("🚀 하이브리드 프레임워크")
-    
-    steps = [
-        "0. 홈 (Home)",
-        "1. 데이터 업로드",
-        "2. 데이터 시각화",
-        "3. 데이터 전처리",
-        "4. 모델 학습",
-        "5. 모델 예측",
-        "6. 성능 평가"
-    ]
-    
-    # 현재 단계 표시 및 이동
-    current_idx = st.session_state.step
-    selected_step = st.radio("단계 선택:", steps, index=current_idx)
-    st.session_state.step = steps.index(selected_step)
-    
-    st.divider()
-    
-    # 현재 상태 정보 표시
-    st.markdown("### ℹ️ 현재 상태")
-    if st.session_state.data['merged'] is not None:
-        st.success("데이터 로드됨")
-    else:
-        st.warning("데이터 없음")
-        
-    st.info(f"작업 유형: {'분류 (Logit)' if st.session_state.task == 'logit' else '회귀 (Regression)'}")
 
 # ==============================================================================
 # 메인 로직 시작

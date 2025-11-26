@@ -41,6 +41,7 @@ if "models" not in st.session_state:
     st.session_state.models = {"regression": None, "decision_tree": None, "mixed_weights": {"regression": 0.3, "decision_tree": 0.7}}
 if "task" not in st.session_state:
     st.session_state.task = "logit"  # 기본값 logit（분류），의사결정나무（회귀）로 전환 가능
+    
 
 # ----------------------
 # 2. 사이드바：단계导航 + 핵심 설정

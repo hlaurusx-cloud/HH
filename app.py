@@ -259,56 +259,32 @@ elif st.session_state.step == 2:
             st.warning("Y축(수치형 변수)을 선택하거나, 선택된 변수 목록에 수치형 데이터가 포함되어 있는지 확인해주세요.")
 # ----------------------
 # 단계 3：데이터 전처리 & Stepwise 변수 선택 (업그레이드)
-# ----------------------
-elif st.session_state.step == 3:
-    st.subheader("🧹 데이터 전처리 & 자동 변수 선택 (Stepwise)")
+# ----------------------lif st.session_state.step == 3:
+    st.subheader("🧹 데이터 전처리 & 지능형 변수 선택")
     
     if st.session_state.data["merged"] is None:
-        st.warning("먼저「데이터 업로드」단계를 완료하세요")
+        st.warning("⚠️ 먼저 '데이터 업로드' 단계를 완료하세요.")
     else:
         df_merged = st.session_state.data["merged"]
         
-        # 탭 구조 도입: 기본 전처리와 고급 변수 선택 분리
-        tab_basic, tab_stepwise = st.tabs(["1️⃣ 기본 전처리 (필수)", "2️⃣ 변수 선택 과정 시각화 (Stepwise)"])
+        # 탭 분리: 기본 전처리 vs 변수 선택
+        tab_basic, tab_select = st.tabs(["1️⃣ 기본 전처리 (필수)", "2️⃣ 변수 선택 (Stepwise / CART)"])
         
-        # =========================================================
-        # Tab 1: 기본 전처리 (결측치/인코딩) - Stepwise를 위해 필수
-        # =========================================================
+        # --- 1. 기본 전처리 탭 ---
         with tab_basic:
+            st.markdown("##### 🛠️ 결측치 처리 및 인코딩")
+            
             col1, col2 = st.columns(2)
             with col1:
-                st.markdown("### 데이터 현황")
-                st.write(f"데이터 크기: **{len(df_merged):,}** 행")
+                target_col = st.selectbox("🎯 타겟 변수 (Y)", df_merged.columns)
+                st.session_state.preprocess["target_col"] = target_col
             with col2:
-                st.markdown("### 결측값 확인")
-                missing_sum = df_merged.isnull().sum()
-                if missing_sum.sum() > 0:
-                    st.dataframe(missing_sum[missing_sum > 0].reset_index(name="결측수"), height=100)
-                else:
-                    st.success("결측값이 없습니다.")
+                # 불필요한 ID 컬럼 제거 기능
+                drop_cols = st.multiselect("제외할 변수 (ID 등)", [c for c in df_merged.columns if c != target_col])
             
-            st.divider()
+            feature_cols = [c for c in df_merged.columns if c != target_col and c not in drop_cols]
             
-            # 1. 타겟 및 분석 유형 설정
-            target_col = st.selectbox("🎯 타겟 변수 (예측 대상)", df_merged.columns)
-            st.session_state.preprocess["target_col"] = target_col
-            
-            task_choice = st.radio("분석 유형", ["분류 (Logistic)", "회귀 (Regression)"], horizontal=True)
-            st.session_state.task = "logit" if "분류" in task_choice else "regression"
-            
-            # 2. 특징 변수 선택 (ID 등 제외)
-            exclude_cols = st.multiselect("제외할 변수 (ID, 이름 등)", 
-                                        options=[c for c in df_merged.columns if c != target_col])
-            feature_cols = [c for c in df_merged.columns if c not in exclude_cols + [target_col]]
-            
-            # 3. 변환 옵션
-            c1, c2 = st.columns(2)
-            with c1:
-                impute_method = st.selectbox("결측값 처리", ["중앙값(Median)", "평균(Mean)", "0으로 채움"])
-            with c2:
-                enc_method = st.selectbox("범주형 변수 처리", ["Label Encoding", "One-Hot Encoding"])
-
-            if st.button("⚡ 전처리 실행 (변환)", type="primary", key="run_preprocess"):
+            if st.button("⚡ 전처리 실행 (변환)", type="primary"):
                 with st.spinner("데이터 변환 중..."):
                     try:
                         X = df_merged[feature_cols].copy()
@@ -318,50 +294,40 @@ elif st.session_state.step == 3:
                         num_cols = X.select_dtypes(include=np.number).columns
                         cat_cols = X.select_dtypes(exclude=np.number).columns
                         
-                        # 결측값 처리
-                        imp_strat = "median" if "중앙값" in impute_method else "mean" if "평균" in impute_method else "constant"
-                        imputer = SimpleImputer(strategy=imp_strat, fill_value=0)
-                        
+                        # 결측값 처리 (SimpleImputer)
+                        imputer = SimpleImputer(strategy='mean')
                         if len(num_cols) > 0:
                             X[num_cols] = imputer.fit_transform(X[num_cols])
                             scaler = StandardScaler()
                             X[num_cols] = scaler.fit_transform(X[num_cols])
                         else:
                             scaler = None
-
-                        # 인코딩
+                            
+                        # 인코딩 (Label Encoding)
                         encoders = {}
                         for col in cat_cols:
                             X[col] = X[col].fillna("Unknown").astype(str)
-                            if "Label" in enc_method:
-                                le = LabelEncoder()
-                                X[col] = le.fit_transform(X[col])
-                                encoders[col] = le
-                            else:
-                                # One-Hot (간소화)
-                                le = LabelEncoder()
-                                X[col] = le.fit_transform(X[col])
-                                encoders[col] = le
-                        
-                        # 세션 저장
+                            le = LabelEncoder()
+                            X[col] = le.fit_transform(X[col])
+                            encoders[col] = le
+                            
+                        # 상태 저장
                         st.session_state.preprocess.update({
                             "imputer": imputer, "scaler": scaler, "encoders": encoders,
-                            "feature_cols": list(X.columns)
+                            "feature_cols": list(X.columns) # 초기엔 모든 변수 사용
                         })
                         st.session_state.data["X_processed"] = X
                         st.session_state.data["y_processed"] = y
                         
-                        st.success("✅ 전처리 완료! 이제 옆의 [Stepwise 탭]에서 변수 선택 과정을 확인하세요.")
+                        st.success("✅ 전처리 완료! 이제 옆의 [변수 선택] 탭으로 이동하세요.")
                         
                     except Exception as e:
-                        st.error(f"오류 발생: {e}")
+                        st.error(f"전처리 오류: {e}")
 
-        # =========================================================
-        # Tab 2: Stepwise 변수 선택 (프로세스 시각화 핵심)
-        # =========================================================
-        with tab_stepwise:
-            st.markdown("### 🧬 Stepwise 변수 선택 과정")
-            st.caption("알고리즘이 가장 중요한 변수부터 하나씩 추가하며 모델 성능 변화를 추적합니다.")
+        # --- 2. 변수 선택 탭 (Stepwise / CART 선택) ---
+        with tab_select:
+            st.markdown("##### 🧬 중요 변수 추출 알고리즘")
+            st.info("💡 전처리된 데이터를 기반으로 모델 성능에 가장 중요한 변수를 추출합니다.")
             
             if "X_processed" not in st.session_state.data:
                 st.warning("⚠️ [기본 전처리] 탭에서 전처리를 먼저 수행해주세요.")
@@ -369,185 +335,142 @@ elif st.session_state.step == 3:
                 X = st.session_state.data["X_processed"]
                 y = st.session_state.data["y_processed"]
                 
-                col_conf1, col_conf2 = st.columns([1, 3])
-                with col_conf1:
-                    max_steps = st.number_input("최대 선택 변수 수", min_value=1, max_value=len(X.columns), value=min(10, len(X.columns)))
-                    start_btn = st.button("🚀 변수 선택 시작", type="primary")
+                # 알고리즘 선택
+                method = st.radio(
+                    "변수 선택 방법", 
+                    ["Stepwise (단계적 선택법)", "CART (의사결정나무 중요도)"],
+                    captions=["변수를 하나씩 추가하며 최적 조합 탐색 (시간 소요됨)", "트리 모델의 불순도 감소량을 기반으로 순위 산정 (빠름)"],
+                    horizontal=True
+                )
                 
-                if start_btn:
-                    # 진행 상태 표시 공간
-                    chart_placeholder = st.empty()
-                    log_placeholder = st.empty()
+                col_act, col_display = st.columns([1, 4])
+                
+                # 변수 선택 실행 버튼
+                with col_act:
+                    st.write("") # Spacer
+                    st.write("") 
+                    run_selection = st.button("🚀 변수 분석 시작", type="primary")
+                
+                if run_selection:
+                    st.session_state["selection_done"] = True
+                    st.session_state["selection_method"] = method
                     
-                    # 모델 설정
-                    if st.session_state.task == "logit":
-                        model = LogisticRegression(solver='liblinear')
-                        metric_name = "Accuracy"
-                    else:
-                        model = LinearRegression()
-                        metric_name = "R2 Score"
-                    
-                    # Stepwise (Forward Selection) 로직
-                    selected_features = []
-                    candidates = list(X.columns)
-                    history = []
-                    
-                    # 진행률 바
-                    pbar = st.progress(0)
-                    
-                    for step in range(max_steps):
-                        best_score = -np.inf
-                        best_feature = None
+                    with st.spinner(f"{method} 분석 진행 중..."):
+                        # -------------------------
+                        # A. Stepwise Implementation
+                        # -------------------------
+                        if "Stepwise" in method:
+                            if st.session_state.task == "logit":
+                                model = LogisticRegression(solver='liblinear')
+                                metric_name = "Accuracy"
+                            else:
+                                model = LinearRegression()
+                                metric_name = "R2 Score"
+                                
+                            selected = []
+                            candidates = list(X.columns)
+                            history = []
+                            best_overall_score = -np.inf
+                            
+                            # 최대 15개까지만 탐색 (속도 고려)
+                            max_steps = min(15, len(candidates))
+                            progress_bar = st.progress(0)
+                            
+                            for i in range(max_steps):
+                                best_step_score = -np.inf
+                                best_feature = None
+                                
+                                for feature in candidates:
+                                    trial = selected + [feature]
+                                    X_sub = X[trial]
+                                    # 빠른 평가를 위해 simple split
+                                    X_tr, X_val, y_tr, y_val = train_test_split(X_sub, y, test_size=0.3, random_state=42)
+                                    model.fit(X_tr, y_tr)
+                                    score = model.score(X_val, y_val)
+                                    
+                                    if score > best_step_score:
+                                        best_step_score = score
+                                        best_feature = feature
+                                
+                                if best_feature:
+                                    selected.append(best_feature)
+                                    candidates.remove(best_feature)
+                                    history.append({"Rank": i+1, "Feature": best_feature, "Score": best_step_score})
+                                    progress_bar.progress((i+1)/max_steps)
+                                else:
+                                    break
+                            
+                            progress_bar.empty()
+                            st.session_state["selection_result"] = pd.DataFrame(history)
                         
-                        # 남은 변수 중 하나씩 넣어보며 테스트
-                        for feature in candidates:
-                            current_subset = selected_features + [feature]
-                            # 속도를 위해 단순 train/test split으로 평가
-                            X_sub = X[current_subset]
-                            X_tr, X_val, y_tr, y_val = train_test_split(X_sub, y, test_size=0.3, random_state=42)
-                            
-                            model.fit(X_tr, y_tr)
-                            score = model.score(X_val, y_val)
-                            
-                            if score > best_score:
-                                best_score = score
-                                best_feature = feature
-                        
-                        if best_feature:
-                            selected_features.append(best_feature)
-                            candidates.remove(best_feature)
-                            history.append({
-                                "Step": step + 1,
-                                "변수명": best_feature,
-                                "Score": best_score,
-                                "누적 변수": ", ".join(selected_features)
-                            })
-                            
-                            # 실시간 그래프 업데이트
-                            hist_df = pd.DataFrame(history)
-                            fig = px.line(hist_df, x="Step", y="Score", markers=True, 
-                                          title=f"변수 추가에 따른 성능 변화 ({metric_name})",
-                                          text="변수명")
-                            fig.update_traces(textposition="top center")
-                            fig.update_layout(height=350)
-                            chart_placeholder.plotly_chart(fig, use_container_width=True)
-                            
-                            # 실시간 로그 업데이트
-                            log_placeholder.dataframe(
-                                hist_df[["Step", "변수명", "Score"]].sort_values("Step", ascending=False), 
-                                use_container_width=True
-                            )
-                            
-                            pbar.progress((step + 1) / max_steps)
+                        # -------------------------
+                        # B. CART Implementation
+                        # -------------------------
                         else:
-                            break
-                    
-                    pbar.empty()
-                    st.success("✅ 탐색 완료!")
-                    
-                    # 최종 적용 버튼
-                    st.divider()
-                    st.markdown("#### 🎯 최종 결정")
-                    
-                    col_final1, col_final2 = st.columns([3, 1])
-                    with col_final1:
-                        final_k = st.slider("상위 몇 개의 변수를 최종 모델에 사용하시겠습니까?", 
-                                          1, len(history), len(history))
-                    with col_final2:
-                        if st.button("이 조합으로 확정"):
-                            final_features = [h["변수명"] for h in history[:final_k]]
-                            st.session_state.preprocess["feature_cols"] = final_features
-                            st.session_state.data["X_processed"] = X[final_features]
-                            st.success(f"{len(final_features)}개 변수가 선택되었습니다. '모델 학습' 단계로 이동하세요!")
+                            if st.session_state.task == "logit":
+                                tree = DecisionTreeClassifier(random_state=42, max_depth=10)
+                            else:
+                                tree = DecisionTreeRegressor(random_state=42, max_depth=10)
+                                
+                            tree.fit(X, y)
+                            importances = tree.feature_importances_
+                            
+                            # 중요도 내림차순 정렬
+                            result_df = pd.DataFrame({
+                                "Feature": X.columns,
+                                "Importance": importances
+                            }).sort_values("Importance", ascending=False)
+                            
+                            # 0보다 큰 중요도만 필터링하고 Rank 부여
+                            result_df = result_df[result_df["Importance"] > 0].reset_index(drop=True)
+                            result_df["Rank"] = result_df.index + 1
+                            result_df.rename(columns={"Importance": "Score"}, inplace=True)
+                            
+                            st.session_state["selection_result"] = result_df
 
-        # =========================================================
-        # Tab 2: Stepwise 변수 선택 (프로세스 시각화)
-        # =========================================================
-        with tab_stepwise:
-            st.markdown("### 🧬 Stepwise (Forward Selection) 프로세스")
-            st.info("💡 **전처리 실행 후** 사용 가능합니다. 알고리즘이 변수를 하나씩 추가하며 성능 변화를 추적합니다.")
-            
-            if "X_processed" not in st.session_state.data or st.session_state.data["X_processed"] is None:
-                st.warning("⚠️ 먼저 '기본 전처리' 탭에서 전처리를 실행해주세요.")
-            else:
-                X = st.session_state.data["X_processed"]
-                y = st.session_state.data["y_processed"]
-                current_features = list(X.columns)
-                
-                col_s1, col_s2 = st.columns([1, 3])
-                with col_s1:
-                    st.write(f"**전체 변수 후보**: {len(current_features)}개")
-                    max_vars = st.slider("최대 선택 변수 개수", 1, len(current_features), min(10, len(current_features)))
-                    start_stepwise = st.button("🚀 Stepwise 시작")
-                
-                with col_s2:
-                    if start_stepwise:
-                        # Stepwise 로직 (간소화된 Forward Selection)
-                        selected_features = []
-                        remaining_features = current_features.copy()
-                        history = []  # 그래프용 기록
-                        
-                        placeholder_chart = st.empty() # 차트 갱신용
-                        placeholder_text = st.empty()  # 텍스트 갱신용
-                        
-                        # 모델 설정
-                        if st.session_state.task == "logit":
-                            est = LogisticRegression(max_iter=500, solver='liblinear')
-                            scoring_metric = "Accuracy"
+                # 결과 시각화 및 확정 부분 (분석이 완료된 상태라면 표시)
+                if st.session_state.get("selection_done"):
+                    res_df = st.session_state["selection_result"]
+                    method_used = st.session_state["selection_method"]
+                    
+                    st.divider()
+                    st.markdown(f"#### 📊 {method_used} 분석 결과")
+                    
+                    col_res1, col_res2 = st.columns([2, 1])
+                    
+                    with col_res1:
+                        # 차트 시각화
+                        if "Stepwise" in method_used:
+                            fig = px.line(res_df, x="Rank", y="Score", markers=True, text="Feature",
+                                          title="변수 추가에 따른 모델 성능 변화")
+                            fig.update_traces(textposition="top center")
                         else:
-                            est = LinearRegression()
-                            scoring_metric = "R2 Score"
-                            
-                        # 반복 시작
-                        progress_bar = st.progress(0)
+                            # CART Bar Chart
+                            top_n = res_df.head(10).sort_values("Score", ascending=True) # 차트용 정렬
+                            fig = px.bar(top_n, x="Score", y="Feature", orientation='h',
+                                         title="Top 10 변수 중요도 (Feature Importance)")
+                        st.plotly_chart(fig, use_container_width=True)
                         
-                        for i in range(max_vars):
-                            best_score = -np.inf
-                            best_feature = None
-                            
-                            # 남은 변수들 중 가장 좋은 것 하나 찾기
-                            for feature in remaining_features:
-                                trial_features = selected_features + [feature]
-                                X_subset = X[trial_features]
-                                
-                                # 간단한 검증 (Train set 내에서 split)
-                                X_tr, X_val, y_tr, y_val = train_test_split(X_subset, y, test_size=0.2, random_state=42)
-                                est.fit(X_tr, y_tr)
-                                score = est.score(X_val, y_val)
-                                
-                                if score > best_score:
-                                    best_score = score
-                                    best_feature = feature
-                            
-                            # 결과 기록
-                            if best_feature:
-                                selected_features.append(best_feature)
-                                remaining_features.remove(best_feature)
-                                history.append({"Step": i+1, "Added Feature": best_feature, "Score": best_score})
-                                
-                                # 실시간 업데이트
-                                placeholder_text.markdown(f"**Step {i+1}**: `+ {best_feature}` 추가됨 (Score: {best_score:.4f})")
-                                progress_bar.progress((i + 1) / max_vars)
-                                
-                                # 실시간 차트 그리기
-                                df_hist = pd.DataFrame(history)
-                                fig = px.line(df_hist, x="Step", y="Score", markers=True, 
-                                              title=f"Stepwise Selection Process ({scoring_metric})",
-                                              hover_data=["Added Feature"])
-                                placeholder_chart.plotly_chart(fig, use_container_width=True)
-                        
-                        st.success("✅ 변수 선택 완료!")
-                        
-                        # 결과 테이블 표시
-                        st.markdown("#### 📜 선택 과정 상세")
-                        st.dataframe(pd.DataFrame(history), use_container_width=True)
-                        
-                        # 최종 적용 버튼
-                        st.markdown("---")
-                        if st.button("🎯 이 변수 조합 적용하기 (모델 학습에 사용)"):
-                            st.session_state.preprocess["feature_cols"] = selected_features
-                            st.session_state.data["X_processed"] = X[selected_features]
-                            st.success(f"✅ 상위 {len(selected_features)}개 변수가 적용되었습니다! 이제 '모델 학습' 단계로 이동하세요.")
+                    with col_res2:
+                        # 데이터프레임 표시
+                        st.write("**상위 변수 목록**")
+                        st.dataframe(res_df[["Rank", "Feature", "Score"]], height=300)
+                    
+                    # 최종 변수 확정 UI
+                    st.markdown("---")
+                    st.subheader("🎯 최종 모델 변수 확정")
+                    
+                    # 상위 N개 선택 슬라이더
+                    default_k = min(len(res_df), 5)
+                    top_k = st.slider("상위 몇 개의 변수를 모델에 사용하시겠습니까?", 1, len(res_df), default_k)
+                    
+                    final_vars = res_df["Feature"].iloc[:top_k].tolist()
+                    st.write(f"👉 **선택된 변수 ({len(final_vars)}개):** {', '.join(final_vars)}")
+                    
+                    if st.button("✅ 이 변수 조합으로 모델 학습하기", type="primary"):
+                        st.session_state.preprocess["feature_cols"] = final_vars
+                        st.session_state.data["X_processed"] = X[final_vars]
+                        st.success("변수 설정이 완료되었습니다! '모델 학습' 단계로 이동하세요.")
 # ----------------------
 # 단계 4：모델 학습
 # ----------------------

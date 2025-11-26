@@ -20,6 +20,62 @@ warnings.filterwarnings("ignore")
 # 페이지 설정
 st.set_page_config(page_title="하이브리드모형 프레임워크", layout="wide")
 
+# ----------------------
+# 1. 페이지 기본 설정
+# ----------------------
+st.set_page_config(
+    page_title="하이브리드모형 동적 프레임워크（의사결정나무+회귀분석）",
+    page_icon="📊",
+    layout="wide"
+)
+
+# 전역 상태 관리（각 단계 데이터/모델 저장，새로고침 시 손실 방지）
+if "step" not in st.session_state:
+    st.session_state.step = 0  # 0:초기화면 1:데이터업로드 2:데이터시각화 3:데이터전처리 4:모델학습 5:예측 6:평가
+if "data" not in st.session_state:
+    st.session_state.data = {"merged": None}  # 단일 파일만 저장
+if "preprocess" not in st.session_state:
+    st.session_state.preprocess = {"imputer": None, "scaler": None, "encoders": None, "feature_cols": None, "target_col": None}
+if "models" not in st.session_state:
+    # 模型：regression（회귀분석）、decision_tree（의사결정나무）
+    st.session_state.models = {"regression": None, "decision_tree": None, "mixed_weights": {"regression": 0.3, "decision_tree": 0.7}}
+if "task" not in st.session_state:
+    st.session_state.task = "logit"  # 기본값 logit（분류），의사결정나무（회귀）로 전환 가능
+
+# ----------------------
+# 2. 사이드바：단계导航 + 핵심 설정
+# ----------------------
+st.sidebar.title("📌 하이브리드모형 작업 흐름")
+st.sidebar.divider()
+
+# 단계导航 버튼（新增「데이터 시각화」단계）
+steps = ["초기 설정", "데이터 업로드", "데이터 시각화", "데이터 전처리", "모델 학습", "모델 예측", "성능 평가"]
+for i, step_name in enumerate(steps):
+    if st.sidebar.button(step_name, key=f"btn_{i}"):
+        st.session_state.step = i
+
+# 핵심 설정（작업 유형 + 혼합 가중치）
+st.sidebar.divider()
+st.sidebar.subheader("핵심 설정")
+st.session_state.task = st.sidebar.radio("작업 유형", options=["logit", "의사결정나무"], index=0)
+
+if st.session_state.step >= 4:  # 모델 학습 후 가중치 조정 가능
+    st.sidebar.subheader("하이브리드모형 가중치")
+    reg_weight = st.sidebar.slider(
+        "회귀 분석 가중치（해석력 강함）",
+        min_value=0.0, max_value=1.0, value=st.session_state.models["mixed_weights"]["regression"], step=0.1
+    )
+    st.session_state.models["mixed_weights"]["regression"] = reg_weight
+    st.session_state.models["mixed_weights"]["decision_tree"] = 1 - reg_weight
+    st.sidebar.text(f"의사결정나무 가중치（정확도 높음）：{1 - reg_weight:.1f}")
+
+# ----------------------
+# 3. 메인 페이지：단계별 내용 표시
+# ----------------------
+st.title("📊 하이브리드모형 동적 배포 프레임워크")
+st.markdown("**단일 원본 데이터 파일 업로드 후，시각화→전처리→학습→예측 전과정을 한 번에 완성**")
+st.markdown("### 🧩 핵심 모델：회귀 분석（Regression）+ 의사결정나무（Decision Tree）")
+st.divider()
 
 # ==============================================================================
 # 메인 로직 시작

@@ -407,59 +407,97 @@ elif st.session_state.step == 3:
                     st.info("👈 먼저 [전처리 실행] 버튼을 눌러주세요.")
                     
 # ----------------------
-# 단계 4：모델 학습
+# 단계 4：모델 학습 (개선된 버전)
 # ----------------------
 elif st.session_state.step == 4:
     st.subheader("🚀 하이브리드모형 학습")
     
     if "X_processed" not in st.session_state.data or st.session_state.data["X_processed"] is None:
-        st.warning("먼저「데이터 전처리」단계를 완료하세요")
+        st.warning("⚠️ 먼저「데이터 전처리」단계를 완료하세요")
     else:
         X = st.session_state.data["X_processed"]
         y = st.session_state.data["y_processed"]
         
-        st.markdown("### 1. 학습 설정")
+        st.markdown("### 1. 학습 설정 확인")
+        
+        # [자동 진단] 작업 유형(Task)과 데이터(Target)가 맞는지 검사
+        is_target_numeric = pd.api.types.is_numeric_dtype(y)
+        target_unique_count = y.nunique()
+        
+        # 진단 1: 타겟이 1개밖에 없을 때 (학습 불가)
+        if target_unique_count < 2:
+            st.error(f"❌ 타겟 변수(Y)의 값 종류가 1개({y.unique()[0]})뿐입니다. 모델을 학습할 수 없습니다.")
+            st.stop()
+            
+        # 진단 2: 분류(Logit)인데 타겟이 연속형 숫자일 때 (설정 실수 가능성 높음)
+        if st.session_state.task == "logit" and is_target_numeric and target_unique_count > 20:
+            st.warning(f"⚠️ **주의 감지**: 타겟 변수가 '연속된 숫자({target_unique_count}개 종류)'로 보입니다.")
+            st.info("💡 혹시 **매출, 가격, 점수** 등을 예측하시나요? 그렇다면 왼쪽 사이드바의 **[핵심 설정]**에서 **'의사결정나무(회귀)'**를 선택해주세요.")
+
         col1, col2 = st.columns(2)
         with col1:
-            test_size = st.slider("테스트셋 비율", 0.1, 0.4, 0.2, 0.05)
+            test_size = st.slider("테스트 데이터 비율 (Test Size)", 0.1, 0.4, 0.2, 0.05)
         with col2:
-            st.info(f"현재 작업 유형: **{st.session_state.task}**")
-            
-        # Stratify 로직
+            st.info(f"현재 분석 모드: **{st.session_state.task}**")
+
+        # -------------------------------------------------------
+        # Stratify(층화 추출) 로직 개선
+        # -------------------------------------------------------
         stratify_param = None
+        
         if st.session_state.task == "logit":
-            if y.nunique() >= 2 and (y.value_counts() >= 2).all():
+            # 각 클래스별 데이터가 최소 2개 이상이어야 층화 추출 가능
+            class_counts = y.value_counts()
+            if (class_counts >= 2).all():
                 stratify_param = y
-                st.success("✅ 층화 추출(Stratified Sampling) 적용됨")
+                st.success(f"✅ 층화 추출(Stratified Split) 적용됨 (클래스 균형 유지)")
             else:
-                st.warning("⚠️ 클래스 불균형 또는 샘플 부족으로 층화 추출 미적용")
+                # 어떤 클래스가 문제인지 알려줌
+                problem_classes = class_counts[class_counts < 2].index.tolist()
+                st.warning(f"⚠️ 층화 추출 미적용: 데이터가 1개뿐인 클래스가 있습니다. {problem_classes[:3]}...")
+                st.caption("데이터 부족으로 무작위 분할(Random Split)을 진행합니다.")
+        else:
+            st.caption("ℹ️ 회귀 분석(Regression)은 층화 추출을 사용하지 않습니다.")
         
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=42, stratify=stratify_param
-        )
+        # 데이터 분할
+        try:
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=test_size, random_state=42, stratify=stratify_param
+            )
+        except ValueError as e:
+            # 층화 추출 실패 시 재시도 (fallback)
+            st.warning("⚠️ 층화 추출 실패로 단순 무작위 분할을 시도합니다.")
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=test_size, random_state=42, stratify=None
+            )
+
+        st.divider()
         
-        # [수정 4] 가중치 설정 추가
+        # [수정] 가중치 설정 UI
         st.markdown("### 2. 하이브리드 가중치 설정")
         w_col1, w_col2 = st.columns(2)
         with w_col1:
-            reg_weight = st.slider("회귀분석(Logistic/Linear) 가중치", 0.0, 1.0, 0.5)
+            reg_weight = st.slider("회귀 모델(Linear/Logistic) 비중", 0.0, 1.0, 0.5)
         with w_col2:
-            st.metric("의사결정나무 가중치", f"{1.0 - reg_weight:.1f}")
+            st.metric("트리 모델(Tree) 비중", f"{1.0 - reg_weight:.1f}")
             
-        # 모델 정의
+        # 모델 정의 및 학습
         if st.session_state.task == "logit":
-            reg_model = LogisticRegression(max_iter=1000)
+            # 로지스틱 회귀 (수렴 경고 방지를 위해 max_iter 증가)
+            reg_model = LogisticRegression(max_iter=2000) 
             dt_model = DecisionTreeClassifier(random_state=42, max_depth=10)
         else:
             reg_model = LinearRegression()
             dt_model = DecisionTreeRegressor(random_state=42, max_depth=10)
             
-        if st.button("모델 학습 시작", type="primary"):
-            with st.spinner("모델 학습 중..."):
+        if st.button("🚀 모델 학습 시작", type="primary"):
+            with st.spinner("모델 학습 중입니다..."):
                 try:
+                    # 학습 수행
                     reg_model.fit(X_train, y_train)
                     dt_model.fit(X_train, y_train)
                     
+                    # 모델 및 결과 저장
                     st.session_state.models["regression"] = reg_model
                     st.session_state.models["decision_tree"] = dt_model
                     st.session_state.models["mixed_weights"] = {
@@ -471,12 +509,18 @@ elif st.session_state.step == 4:
                         "y_train": y_train, "y_test": y_test
                     })
                     
-                    st.success("✅ 모델 학습 완료!")
-                    st.markdown(f"**학습 데이터**: {len(X_train):,}개 | **테스트 데이터**: {len(X_test):,}개")
+                    st.success("✅ 모델 학습이 완료되었습니다!")
                     
+                    # 결과 요약
+                    summ_col1, summ_col2 = st.columns(2)
+                    with summ_col1:
+                        st.markdown(f"**학습 데이터**: {len(X_train):,} 건")
+                    with summ_col2:
+                        st.markdown(f"**테스트 데이터**: {len(X_test):,} 건")
+                        
                 except Exception as e:
-                    st.error(f"학습 실패: {str(e)}")
-
+                    st.error(f"❌ 학습 중 오류 발생: {str(e)}")
+                    st.warning("데이터의 타겟 변수(Y) 타입과 '작업 유형(분류/회귀)'이 맞는지 다시 확인해주세요.")
 # ----------------------
 # 단계 5：모델 예측
 # ----------------------

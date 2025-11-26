@@ -100,7 +100,7 @@ if st.session_state.step == 0:
     
     1. **데이터 업로드**：단일 원본 파일（CSV/Parquet/Excel）을 업로드
     2. **데이터 시각화**：변수 탐색
-    3. **데이터 전처리**：결측값 처리 및 인코딩
+    3. **데이터 전처리**：결측값 처리 및 인코딩 (자동 에러 방지 포함)
     4. **모델 학습**：「회귀+의사결정나무」
     5. **모델 예측**：단일/일괄 예측
     6. **성능 평가**：모델 비교
@@ -201,7 +201,7 @@ elif st.session_state.step == 2:
                     st.error(f"시각화 오류: {e}")
 
 # ----------------------
-#  步骤 3：预处理
+#  步骤 3：预处理 (增强清洗版)
 # ----------------------
 elif st.session_state.step == 3:
     st.subheader("🧹 데이터 전처리")
@@ -221,6 +221,10 @@ elif st.session_state.step == 3:
                 X = df[input_cols].copy()
                 y = df[target_col].copy()
                 
+                # [CRITICAL Fix] Inf -> NaN
+                # 무한대 값을 NaN으로 변환하여 Imputer가 처리할 수 있게 함
+                X = X.replace([np.inf, -np.inf], np.nan)
+                
                 # 2. Target Encoding
                 le_target = None
                 if st.session_state.task == "logit" and y.dtype == 'object':
@@ -236,13 +240,21 @@ elif st.session_state.step == 3:
                 encoders = {}
                 
                 if num_cols:
-                    X[num_cols] = scaler.fit_transform(imputer.fit_transform(X[num_cols]))
+                    # Impute then Scale
+                    X_num = imputer.fit_transform(X[num_cols])
+                    X[num_cols] = scaler.fit_transform(X_num)
                 
                 for col in cat_cols:
                     X[col] = X[col].fillna("Unknown").astype(str)
                     le = LabelEncoder()
                     X[col] = le.fit_transform(X[col])
                     encoders[col] = le
+                
+                # [CRITICAL Fix] Final Safety Fill
+                # 혹시라도 스케일링 과정에서 NaN이 생겼다면 0으로 대체
+                if X.isna().sum().sum() > 0:
+                    st.warning("⚠️ 일부 데이터에 결측치가 남아있어 0으로 대체했습니다.")
+                    X = X.fillna(0)
                 
                 # Save State
                 final_cols = num_cols + cat_cols
@@ -279,6 +291,11 @@ elif st.session_state.step == 4:
         
         if st.button("학습 시작"):
             try:
+                # 안전장치: 학습 직전 다시 한번 데이터 체크
+                if X.isna().sum().sum() > 0 or np.isinf(X).sum().sum() > 0:
+                    st.warning("학습 데이터에 이상값(NaN/Inf)이 있어 0으로 보정합니다.")
+                    X = X.replace([np.inf, -np.inf], 0).fillna(0)
+
                 # Split
                 stratify = y if (st.session_state.task == "logit" and y.nunique() > 1) else None
                 X_train, X_test, y_train, y_test = train_test_split(
@@ -323,13 +340,18 @@ elif st.session_state.step == 5:
             
             # Numeric
             if pre["num_cols"]:
+                # 입력 데이터 안전 처리
+                df[pre["num_cols"]] = df[pre["num_cols"]].replace([np.inf, -np.inf], np.nan).fillna(0)
                 df[pre["num_cols"]] = pre["scaler"].transform(pre["imputer"].transform(df[pre["num_cols"]]))
             
             # Category
             for c in pre["cat_cols"]:
-                val = str(df.iloc[0][c])
-                enc = pre["encoders"][c]
-                df[c] = enc.transform([val])[0] if val in enc.classes_ else 0
+                if c in df.columns:
+                    val = str(df.iloc[0][c])
+                    enc = pre["encoders"][c]
+                    df[c] = enc.transform([val])[0] if val in enc.classes_ else 0
+                else:
+                    df[c] = 0
                 
             X_in = df[pre["feature_cols"]]
             w = st.session_state.models["mixed_weights"]
@@ -402,4 +424,4 @@ elif st.session_state.step == 6:
             
             fig = px.scatter(x=y_test, y=p_mix, title="Actual vs Predicted")
             fig.add_shape(type='line', x0=y_test.min(), y0=y_test.min(), x1=y_test.max(), y1=y_test.max(), line=dict(dash='dash', color='red'))
-        
+           

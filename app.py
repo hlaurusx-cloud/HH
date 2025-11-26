@@ -255,7 +255,7 @@ elif st.session_state.step == 2:
                 st.info("Y축 변수를 선택하면 그래프가 표시됩니다.")
 
 # ----------------------
-# 단계 3：데이터 전처리 & 변수 선택 (오류 수정 버전)
+# 단계 3：데이터 전처리 & 변수 선택 (최종 수정 - 빈 컬럼 자동 제외)
 # ----------------------
 elif st.session_state.step == 3:
     st.subheader("🧹 데이터 전처리 & 변수 선택")
@@ -263,21 +263,18 @@ elif st.session_state.step == 3:
     if st.session_state.data["merged"] is None:
         st.warning("⚠️ 먼저 '데이터 업로드' 단계를 완료하세요.")
     else:
-        # 원본 데이터 안전하게 가져오기 (인덱스 초기화가 핵심)
+        # 1. 데이터 가져오기 및 인덱스 초기화
         df_origin = st.session_state.data["merged"].copy().reset_index(drop=True)
         all_cols = df_origin.columns.tolist()
 
-        st.markdown("### 1️⃣ 분석에 사용할 변수 선택 (Selection)")
+        st.markdown("### 1️⃣ 분석에 사용할 변수 선택")
         
         col1, col2 = st.columns(2)
         with col1:
-            # 1. 타겟 변수(Y) 선택
             target_col = st.selectbox("🎯 타겟 변수 (Y) 선택", options=all_cols)
         
-        # 타겟을 제외한 나머지 변수들을 옵션으로 제공
         feature_candidates = [c for c in all_cols if c != target_col]
         
-        # 2. 입력 변수(X) 다중 선택
         with col2:
             default_feats = feature_candidates[:10] if len(feature_candidates) > 10 else feature_candidates
             selected_features = st.multiselect(
@@ -291,60 +288,66 @@ elif st.session_state.step == 3:
         if not selected_features:
             st.warning("⚠️ 분석할 변수를 최소 1개 이상 선택해주세요.")
         else:
-            # 상태 저장
             st.session_state.preprocess["target_col"] = target_col
             
-            tab_proc, tab_imp = st.tabs(["⚡ 선택된 변수 전처리 실행", "📊 변수 중요도 확인"])
+            tab_proc, tab_imp = st.tabs(["⚡ 전처리 실행", "📊 변수 중요도"])
             
             with tab_proc:
-                st.markdown(f"**선택된 {len(selected_features)}개의 변수만 추출하여 전처리를 수행합니다.**")
+                st.markdown(f"**선택된 {len(selected_features)}개의 변수 전처리를 수행합니다.**")
                 
-                if st.button("🚀 전처리 시작 (결측치+인코딩)", type="primary"):
-                    with st.spinner("데이터 변환 중..."):
+                if st.button("🚀 전처리 시작", type="primary"):
+                    with st.spinner("데이터 정제 중..."):
                         try:
-                            # [핵심 수정 1] 인덱스 완전 초기화로 길이 불일치 방지
+                            # X, y 분리 및 초기화
                             X = df_origin[selected_features].copy().reset_index(drop=True)
                             y = df_origin[target_col].copy().reset_index(drop=True)
                             
-                            # 수치형/범주형 자동 분류
+                            # 초기 컬럼 분류
                             num_cols = X.select_dtypes(include=['int64', 'float64']).columns.tolist()
                             cat_cols = X.select_dtypes(include=['object', 'category']).columns.tolist()
                             
-                            # 1. 수치형 처리 (Imputation + Scaling)
+                            # [핵심 수정] 1. 수치형 변수 중 '모든 값이 비어있는(NaN)' 컬럼 제거
+                            # 이걸 안 하면 Imputer가 몰래 삭제해서 에러가 발생함
+                            valid_num_cols = [c for c in num_cols if X[c].notna().sum() > 0]
+                            dropped_cols = list(set(num_cols) - set(valid_num_cols))
+                            
+                            if dropped_cols:
+                                st.warning(f"⚠️ 다음 컬럼은 데이터가 모두 비어있어 분석에서 제외됩니다: {dropped_cols}")
+                                num_cols = valid_num_cols # 유효한 컬럼 리스트로 교체
+                            
+                            # 객체 생성
                             imputer = SimpleImputer(strategy='mean')
                             scaler = StandardScaler()
                             
+                            # 2. 수치형 처리 (유효한 컬럼만)
                             if num_cols:
-                                # [핵심 수정 2] 결과 배열을 DataFrame으로 명시적 변환 후 할당
-                                # 이렇게 해야 인덱스와 컬럼명이 꼬이지 않습니다.
+                                # fit_transform 결과는 np.array
                                 X_imputed = imputer.fit_transform(X[num_cols])
                                 X_scaled = scaler.fit_transform(X_imputed)
                                 
+                                # DataFrame으로 변환하여 할당 (인덱스 매칭 필수)
                                 X[num_cols] = pd.DataFrame(
                                     X_scaled, 
                                     columns=num_cols, 
-                                    index=X.index  # 인덱스 강제 일치
+                                    index=X.index
                                 )
                             
-                            # 2. 범주형 처리 (Label Encoding)
+                            # 3. 범주형 처리
                             encoders = {}
                             for col in cat_cols:
-                                # 결측치 처리 및 문자열 변환
                                 X[col] = X[col].fillna("Unknown").astype(str)
-                                
                                 le = LabelEncoder()
-                                transformed_data = le.fit_transform(X[col])
-                                
-                                # [핵심 수정 3] Series로 변환하여 인덱스 맞춰서 할당
-                                X[col] = pd.Series(
-                                    transformed_data, 
-                                    index=X.index # 인덱스 강제 일치
-                                )
+                                trans_data = le.fit_transform(X[col])
+                                X[col] = pd.Series(trans_data, index=X.index)
                                 encoders[col] = le
                             
-                            # 3. 결과 저장 (전역 상태)
+                            # [중요] 제외된 컬럼이 있다면 최종 Feature 목록에서도 제거
+                            final_features = num_cols + cat_cols
+                            X = X[final_features] # 순서 정렬 및 불필요 컬럼 제거
+                            
+                            # 저장
                             st.session_state.preprocess.update({
-                                "feature_cols": selected_features,
+                                "feature_cols": final_features, # 업데이트된 최종 변수 리스트
                                 "imputer": imputer if num_cols else None,
                                 "scaler": scaler if num_cols else None,
                                 "encoders": encoders,
@@ -355,35 +358,29 @@ elif st.session_state.step == 3:
                             st.session_state.data["X_processed"] = X
                             st.session_state.data["y_processed"] = y
                             
-                            st.success("✅ 전처리 완료! 데이터 형식이 모델 학습에 맞게 변환되었습니다.")
-                            st.dataframe(X.head(3), use_container_width=True)
+                            st.success("✅ 전처리 완료!")
+                            st.dataframe(X.head(), use_container_width=True)
                             
                         except Exception as e:
-                            st.error(f"❌ 전처리 오류 발생: {str(e)}")
-                            st.info("💡 팁: 데이터프레임 인덱스 문제일 가능성이 높습니다. 위 코드는 인덱스를 강제로 재정렬하여 해결을 시도합니다.")
+                            st.error(f"❌ 전처리 오류: {str(e)}")
+                            st.error("데이터에 문자열이 섞인 숫자 컬럼이 있거나, 특수문자가 포함된 것 같습니다.")
 
             with tab_imp:
                 if "X_processed" in st.session_state.data and st.session_state.data["X_processed"] is not None:
-                    st.markdown("##### 🧬 변수 중요도 (Feature Importance)")
-                    if st.button("중요도 분석 실행"):
+                    if st.button("변수 중요도 분석"):
                         X_p = st.session_state.data["X_processed"]
                         y_p = st.session_state.data["y_processed"]
                         
-                        # 모델 선택
                         model = DecisionTreeClassifier(max_depth=5) if st.session_state.task == "logit" else DecisionTreeRegressor(max_depth=5)
-                        try:
-                            model.fit(X_p, y_p)
-                            imp = pd.DataFrame({
-                                "Feature": X_p.columns,
-                                "Importance": model.feature_importances_
-                            }).sort_values("Importance", ascending=False)
-                            
-                            fig = px.bar(imp, x="Importance", y="Feature", orientation='h', title="변수 중요도 Top Features")
-                            st.plotly_chart(fig, use_container_width=True)
-                        except Exception as e:
-                            st.error(f"분석 실패: {e}")
-                else:
-                    st.info("👈 먼저 [전처리 실행] 버튼을 눌러주세요.")
+                        model.fit(X_p, y_p)
+                        
+                        imp = pd.DataFrame({
+                            "Feature": X_p.columns,
+                            "Importance": model.feature_importances_
+                        }).sort_values("Importance", ascending=False)
+                        
+                        st.plotly_chart(px.bar(imp, x="Importance", y="Feature", orientation='h'), use_container_width=True)
+                        
 # ----------------------
 # 단계 4：모델 학습
 # ----------------------

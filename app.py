@@ -255,100 +255,131 @@ elif st.session_state.step == 2:
                 st.info("Y축 변수를 선택하면 그래프가 표시됩니다.")
 
 # ----------------------
-# Step 3: 数据预处理 (包含核心修复)
+#  단계 3：데이터 전처리 (수정됨)
 # ----------------------
 elif st.session_state.step == 3:
-    st.subheader("🧹 数据预处理 & 变量选择")
+    st.subheader("🧹 데이터 전처리 & 변수 선택")
     
     if st.session_state.data["merged"] is None:
-        st.warning("⚠️ 请先上传数据")
+        st.warning("⚠️ 먼저 '데이터 업로드' 단계를 완료하세요.")
     else:
+        # 원본 데이터 로드
         df_origin = st.session_state.data["merged"].copy()
         all_cols = df_origin.columns.tolist()
 
+        st.markdown("### 1️⃣ 분석 변수 설정")
+        
         col1, col2 = st.columns(2)
         with col1:
-            target_col = st.selectbox("🎯 目标变量 (Y)", options=all_cols)
+            target_col = st.selectbox("🎯 타겟 변수 (Y)", options=all_cols)
         
         feature_candidates = [c for c in all_cols if c != target_col]
-        with col2:
-            selected_features = st.multiselect("📋 输入变量 (X)", options=feature_candidates, default=feature_candidates[:5])
         
-        if st.button("🚀 执行预处理", type="primary"):
-            if not selected_features:
-                st.error("请选择至少一个输入变量")
-            else:
-                with st.spinner("数据清洗中..."):
+        with col2:
+            # 기본 선택 개수 제한 없이 전체 혹은 일부 선택 (기본 10개)
+            default_feats = feature_candidates[:10] if len(feature_candidates) > 10 else feature_candidates
+            selected_features = st.multiselect(
+                "📋 입력 변수 (X)",
+                options=feature_candidates,
+                default=default_feats
+            )
+        
+        st.divider()
+
+        if not selected_features:
+            st.error("⚠️ 분석할 변수를 선택해주세요.")
+        else:
+            # 설정 저장
+            st.session_state.preprocess["target_col"] = target_col
+            
+            if st.button("🚀 전처리 실행", type="primary"):
+                with st.spinner("데이터 정제 및 변환 중..."):
                     try:
-                        # 1. 基础清洗
+                        # [중요 1] 타겟(Y)이 비어있는 행 우선 제거
                         clean_df = df_origin.dropna(subset=[target_col]).reset_index(drop=True)
+                        
+                        # 제거된 행 안내
+                        dropped_count = len(df_origin) - len(clean_df)
+                        if dropped_count > 0:
+                            st.warning(f"⚠️ 타겟 변수({target_col})가 비어있는 {dropped_count}개 행을 제거했습니다.")
+                        
+                        # X, y 분리
                         X = clean_df[selected_features].copy()
                         y = clean_df[target_col].copy()
 
-                        # 处理无穷值 (要在 Imputer 之前)
+                        # [중요 2] 무한대(Inf) 값 처리 (Imputer 적용 전 필수)
                         X = X.replace([np.inf, -np.inf], np.nan)
-
-                        # 2. 自动类型识别
+                        
+                        # [중요 3] 타겟(Y) 자동 인코딩 (분류 작업인데 문자열인 경우)
+                        le_target = None
+                        if st.session_state.task == "logit" and y.dtype == 'object':
+                            le_target = LabelEncoder()
+                            y = pd.Series(le_target.fit_transform(y), index=y.index)
+                            st.info("ℹ️ 타겟 변수(Y)가 문자열이어서 숫자로 자동 변환되었습니다.")
+                        
+                        # 컬럼 타입 자동 분류
                         num_cols = X.select_dtypes(include=['int64', 'float64']).columns.tolist()
                         cat_cols = X.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
+                        
+                        # 값이 완전히 비어있는 수치형 컬럼 제외
+                        valid_num_cols = [c for c in num_cols if X[c].notna().sum() > 0]
+                        if len(valid_num_cols) != len(num_cols):
+                            st.warning("⚠️ 모든 값이 비어있는 수치형 컬럼이 제외되었습니다.")
+                        num_cols = valid_num_cols 
 
-                        # 3. 准备处理器
+                        # 변환기(Scaler, Imputer) 준비
                         imputer = SimpleImputer(strategy='mean')
                         scaler = StandardScaler()
                         encoders = {}
-                        cat_modes = {} # 保存众数，用于预测时填充未知值
+                        cat_modes = {} # [핵심] 범주형 변수의 최빈값 저장 (예측 시 결측 대처용)
 
-                        # 4. 数值型处理
+                        # 4. 수치형 데이터 처리 (결측 채우기 -> 스케일링)
                         if num_cols:
-                            # 先 Impute 再 Scale
                             X_imputed = imputer.fit_transform(X[num_cols])
                             X_scaled = scaler.fit_transform(X_imputed)
+                            # DataFrame으로 다시 감싸서 인덱스/컬럼 유지
                             X[num_cols] = pd.DataFrame(X_scaled, columns=num_cols, index=X.index)
-
-                        # 5. 类别型处理 (核心修复：强制转字符串，保存众数)
+                        
+                        # 5. 범주형 데이터 처리 (안전한 인코딩)
                         for col in cat_cols:
-                            # 填补 NaN 为 "Missing"
-                            X[col] = X[col].fillna("Missing").astype(str)
+                            # 결측값은 "Unknown"으로 채움
+                            X[col] = X[col].fillna("Unknown").astype(str)
                             
-                            # 记录该列的众数（出现最多的类别），用于后续预测时的 Fallback
+                            # [핵심] 최빈값(Mode) 저장: 나중에 모르는 값이 들어오면 이 값으로 대체하여 에러 방지
                             mode_val = X[col].mode()[0]
                             cat_modes[col] = mode_val
                             
                             le = LabelEncoder()
-                            X[col] = le.fit_transform(X[col])
+                            # fit_transform 후 Series로 변환하여 인덱스 유지
+                            trans = le.fit_transform(X[col])
+                            X[col] = pd.Series(trans, index=X.index)
                             encoders[col] = le
-
-                        # 6. Target 处理
-                        le_target = None
-                        if st.session_state.task == "logit" and y.dtype == 'object':
-                            le_target = LabelEncoder()
-                            y = le_target.fit_transform(y)
-                            st.info("ℹ️ Target 已自动编码为数字")
-
-                        # 保存状态
-                        final_features = num_cols + cat_cols
-                        X = X[final_features] # 确保列顺序一致
                         
+                        # 최종 컬럼 순서 정리
+                        final_features = num_cols + cat_cols
+                        X = X[final_features]
+                        
+                        # 전처리 상태(State) 저장
                         st.session_state.preprocess.update({
                             "feature_cols": final_features,
                             "imputer": imputer if num_cols else None,
                             "scaler": scaler if num_cols else None,
                             "encoders": encoders,
-                            "cat_modes": cat_modes, # 保存众数
+                            "cat_modes": cat_modes, # 예측 단계에서 사용됨
                             "num_cols": num_cols,
                             "cat_cols": cat_cols,
-                            "target_col": target_col,
                             "target_encoder": le_target
                         })
                         
+                        # 처리된 데이터 저장
                         st.session_state.data["X_processed"] = X
                         st.session_state.data["y_processed"] = y
                         
-                        st.success("✅ 预处理完成")
-                        st.dataframe(X.head())
-
+                        st.success(f"✅ 전처리 완료! (데이터 수: {len(X)}행)")
+                        st.dataframe(X.head(), width='stretch')
+                        
                     except Exception as e:
-                        st.error(f"预处理错误: {e}")
+                        st.error(f"❌ 전처리 중 오류 발생: {str(e)}")
                     
 # ----------------------
 #  단계 4：모델 학습 (개선된 버전)

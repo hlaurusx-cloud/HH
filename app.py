@@ -255,169 +255,100 @@ elif st.session_state.step == 2:
                 st.info("Y축 변수를 선택하면 그래프가 표시됩니다.")
 
 # ----------------------
-#  단계 3：데이터 전처리 (완전 수정: 타겟 결측치 제거 및 자동 인코딩)
+# Step 3: 数据预处理 (包含核心修复)
 # ----------------------
 elif st.session_state.step == 3:
-    st.subheader("🧹 데이터 전처리 & 변수 선택 (Final Fix)")
+    st.subheader("🧹 数据预处理 & 变量选择")
     
     if st.session_state.data["merged"] is None:
-        st.warning("⚠️ 먼저 '데이터 업로드' 단계를 완료하세요.")
+        st.warning("⚠️ 请先上传数据")
     else:
-        # 원본 데이터 로드
         df_origin = st.session_state.data["merged"].copy()
         all_cols = df_origin.columns.tolist()
 
-        st.markdown("### 1️⃣ 분석 변수 설정")
-        
         col1, col2 = st.columns(2)
         with col1:
-            target_col = st.selectbox("🎯 타겟 변수 (Y)", options=all_cols)
+            target_col = st.selectbox("🎯 目标变量 (Y)", options=all_cols)
         
         feature_candidates = [c for c in all_cols if c != target_col]
-        
         with col2:
-            default_feats = feature_candidates[:10] if len(feature_candidates) > 10 else feature_candidates
-            selected_features = st.multiselect(
-                "📋 입력 변수 (X)",
-                options=feature_candidates,
-                default=default_feats
-            )
+            selected_features = st.multiselect("📋 输入变量 (X)", options=feature_candidates, default=feature_candidates[:5])
         
-        st.divider()
+        if st.button("🚀 执行预处理", type="primary"):
+            if not selected_features:
+                st.error("请选择至少一个输入变量")
+            else:
+                with st.spinner("数据清洗中..."):
+                    try:
+                        # 1. 基础清洗
+                        clean_df = df_origin.dropna(subset=[target_col]).reset_index(drop=True)
+                        X = clean_df[selected_features].copy()
+                        y = clean_df[target_col].copy()
 
-        if not selected_features:
-            st.error("⚠️ 분석할 변수를 선택해주세요.")
-        else:
-            # 설정 저장
-            st.session_state.preprocess["target_col"] = target_col
-            
-            tab1, tab2 = st.tabs(["⚡ 전처리 실행", "📊 중요도 분석"])
-            
-            with tab1:
-                st.write(f"**Y(타겟) 결측치 제거** 및 **X(입력) 결측치 채우기**를 수행합니다.")
-                
-                if st.button("🚀 전처리 및 정제 시작", type="primary"):
-                    with st.spinner("데이터 정제 중..."):
-                        try:
-                            # [핵심 1] 타겟(Y)이 비어있는 행 제거 (이게 없으면 NaN 에러 발생)
-                            clean_df = df_origin.dropna(subset=[target_col]).reset_index(drop=True)
-                            
-                            dropped_count = len(df_origin) - len(clean_df)
-                            if dropped_count > 0:
-                                st.warning(f"⚠️ 타겟 변수({target_col})값이 비어있는 {dropped_count}개 행을 제거했습니다.")
-                            
-                            # X, y 분리
-                            X = clean_df[selected_features].copy()
-                            y = clean_df[target_col].copy()
-                            
-                            # [핵심 2] 타겟(Y) 데이터 인코딩 (문자일 경우 숫자로 변환)
-                            # 회귀인데 Y가 문자면 에러, 분류면 자동 인코딩
-                            le_target = None
-                            if st.session_state.task == "logit" and y.dtype == 'object':
-                                le_target = LabelEncoder()
-                                y = pd.Series(le_target.fit_transform(y), index=y.index)
-                                st.info("ℹ️ 타겟 변수가 문자열이라 자동으로 숫자로 변환(Encoding)되었습니다.")
-                            
-                            # X 데이터 전처리 시작
-                            num_cols = X.select_dtypes(include=['int64', 'float64']).columns.tolist()
-                            cat_cols = X.select_dtypes(include=['object', 'category']).columns.tolist()
-                            
-                            # 1. 값이 없는(All-NaN) 수치형 컬럼 제외
-                            valid_num_cols = [c for c in num_cols if X[c].notna().sum() > 0]
-                            num_cols = valid_num_cols 
+                        # 处理无穷值 (要在 Imputer 之前)
+                        X = X.replace([np.inf, -np.inf], np.nan)
 
-                            # 변환기 준비
-                            imputer = SimpleImputer(strategy='mean')
-                            scaler = StandardScaler()
-                            encoders = {}
+                        # 2. 自动类型识别
+                        num_cols = X.select_dtypes(include=['int64', 'float64']).columns.tolist()
+                        cat_cols = X.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
 
-                            # 2. 수치형 처리
-                            if num_cols:
-                                # DataFrame 할당 시 index=X.index 필수
-                                X_imputed = imputer.fit_transform(X[num_cols])
-                                X_scaled = scaler.fit_transform(X_imputed)
-                                X[num_cols] = pd.DataFrame(X_scaled, columns=num_cols, index=X.index)
+                        # 3. 准备处理器
+                        imputer = SimpleImputer(strategy='mean')
+                        scaler = StandardScaler()
+                        encoders = {}
+                        cat_modes = {} # 保存众数，用于预测时填充未知值
+
+                        # 4. 数值型处理
+                        if num_cols:
+                            # 先 Impute 再 Scale
+                            X_imputed = imputer.fit_transform(X[num_cols])
+                            X_scaled = scaler.fit_transform(X_imputed)
+                            X[num_cols] = pd.DataFrame(X_scaled, columns=num_cols, index=X.index)
+
+                        # 5. 类别型处理 (核心修复：强制转字符串，保存众数)
+                        for col in cat_cols:
+                            # 填补 NaN 为 "Missing"
+                            X[col] = X[col].fillna("Missing").astype(str)
                             
-                            # 3. 범주형 처리
-                            for col in cat_cols:
-                                X[col] = X[col].fillna("Unknown").astype(str)
-                                le = LabelEncoder()
-                                trans = le.fit_transform(X[col])
-                                X[col] = pd.Series(trans, index=X.index)
-                                encoders[col] = le
+                            # 记录该列的众数（出现最多的类别），用于后续预测时的 Fallback
+                            mode_val = X[col].mode()[0]
+                            cat_modes[col] = mode_val
                             
-                            # 최종 컬럼 정리
-                            final_features = num_cols + cat_cols
-                            X = X[final_features]
-                            
-                            # 新增：检查并处理 X 中的无穷值
-                            X = X.replace([np.inf, -np.inf], np.nan)
-                            
-                            # 检查剩余 NaN 并报告
-                            nan_counts = X.isna().sum()
-                            total_nans = nan_counts.sum()
-                            if total_nans > 0:
-                                st.info(f"ℹ️ 입력 변수에 {total_nans}개의 결측치가 발견되어 처리됩니다.")
-                            
-                            # 最终检查：确保没有 NaN 残留
-                            if X.isna().sum().sum() > 0:
-                                st.warning("⚠️ 일부 결측치 처리에 실패했습니다. 추가 정제가 필요합니다.")
-                            
-                            #  전역 상태 저장
-                            st.session_state.preprocess.update({
-                                "feature_cols": final_features,
-                                "imputer": imputer if num_cols else None,
-                                "scaler": scaler if num_cols else None,
-                                "encoders": encoders,
-                                "num_cols": num_cols,
-                                "cat_cols": cat_cols,
-                                "target_encoder": le_target # Y 인코더도 저장
-                            })
-                            
-                            # 处理된 데이터 저장
-                            st.session_state.data["X_processed"] = X
-                            st.session_state.data["y_processed"] = y
-                            
-                            st.success(f"✅ 전처리 완료! (데이터 수: {len(X)}행)")
-                            st.dataframe(X.head(), width='stretch')
-                            
-                        except Exception as e:
-                            st.error(f"❌ 오류 발생: {str(e)}")
-                            
-            with tab2:
-                if "X_processed" in st.session_state.data and st.session_state.data["X_processed"] is not None:
-                    if st.button("🔍 변수 중요도 확인"):
-                        #  저장된 처리 데이터 가져오기
-                        X_p = st.session_state.data["X_processed"]
-                        y_p = st.session_state.data["y_processed"]
+                            le = LabelEncoder()
+                            X[col] = le.fit_transform(X[col])
+                            encoders[col] = le
+
+                        # 6. Target 处理
+                        le_target = None
+                        if st.session_state.task == "logit" and y.dtype == 'object':
+                            le_target = LabelEncoder()
+                            y = le_target.fit_transform(y)
+                            st.info("ℹ️ Target 已自动编码为数字")
+
+                        # 保存状态
+                        final_features = num_cols + cat_cols
+                        X = X[final_features] # 确保列顺序一致
                         
-                        # NaN 체크 (디버깅용)
-                        if X_p.isna().sum().sum() > 0 or y_p.isna().sum() > 0:
-                            st.error("❌ 데이터에 여전히 결측치(NaN)가 남아있습니다. [전처리 실행] 버튼을 다시 눌러주세요.")
-                        else:
-                            try:
-                                # 模型 피팅
-                                if st.session_state.task == "logit":
-                                    model = DecisionTreeClassifier(max_depth=5, random_state=42)
-                                else:
-                                    model = DecisionTreeRegressor(max_depth=5, random_state=42)
-                                
-                                model.fit(X_p, y_p)
-                                
-                                imp = pd.DataFrame({
-                                    "Feature": X_p.columns,
-                                    "Importance": model.feature_importances_
-                                }).sort_values("Importance", ascending=False)
-                                
-                                st.plotly_chart(
-                                    px.bar(imp, x="Importance", y="Feature", orientation='h', title="변수 중요도"),
-                                    width='stretch'
-                                )
-                            except Exception as e:
-                                st.error(f"분석 실패: {e}")
-                                st.warning("타겟 변수(Y)의 데이터 타입을 확인해주세요 (회귀인데 문자가 들어있는지 등).")
-                else:
-                    st.info("👈 먼저 [전처리 실행] 버튼을 눌러주세요.")
+                        st.session_state.preprocess.update({
+                            "feature_cols": final_features,
+                            "imputer": imputer if num_cols else None,
+                            "scaler": scaler if num_cols else None,
+                            "encoders": encoders,
+                            "cat_modes": cat_modes, # 保存众数
+                            "num_cols": num_cols,
+                            "cat_cols": cat_cols,
+                            "target_col": target_col,
+                            "target_encoder": le_target
+                        })
+                        
+                        st.session_state.data["X_processed"] = X
+                        st.session_state.data["y_processed"] = y
+                        
+                        st.success("✅ 预处理完成")
+                        st.dataframe(X.head())
+
+                    except Exception as e:
+                        st.error(f"预处理错误: {e}")
                     
 # ----------------------
 #  단계 4：모델 학습 (개선된 버전)

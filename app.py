@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
 import plotly.express as px
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, LabelEncoder
@@ -14,16 +13,18 @@ from sklearn.metrics import (
 )
 import warnings
 
-# 忽略警告 & 页面设置
-warnings.filterwarnings("ignore")
+# --------------------------------------------------------------------------
+# [필수] 페이지 설정은 반드시 코드 맨 처음에 와야 합니다.
+# --------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Hybrid Analysis Framework (Auto-Clean)",
-    page_icon="🧹",
+    page_title="Fixed Hybrid Framework",
+    page_icon="🔧",
     layout="wide"
 )
+warnings.filterwarnings("ignore")
 
 # --------------------------------------------------------------------------
-# 1. 全局状态初始化 (Session State)
+# 1. 전역 상태 초기화 (Session State)
 # --------------------------------------------------------------------------
 if "step" not in st.session_state:
     st.session_state.step = 0  
@@ -37,59 +38,47 @@ if "task" not in st.session_state:
     st.session_state.task = "logit" 
 
 # --------------------------------------------------------------------------
-# 2. 侧边栏 (Sidebar)
+# 2. 사이드바 메뉴
 # --------------------------------------------------------------------------
-st.sidebar.title("📌 Process Steps")
-steps = ["0. Start", "1. Upload Data", "2. Visualization", "3. Preprocessing", "4. Model Training", "5. Prediction", "6. Evaluation"]
+st.sidebar.title("📌 단계별 진행")
+steps = ["0. 시작", "1. 데이터 업로드", "2. 데이터 시각화", "3. 데이터 전처리(수정됨)", "4. 모델 학습", "5. 예측", "6. 평가"]
 
 for i, step_name in enumerate(steps):
     if st.sidebar.button(step_name, key=f"btn_{i}"):
         st.session_state.step = i
 
 st.sidebar.divider()
-st.sidebar.subheader("⚙️ Settings")
+st.sidebar.subheader("⚙️ 설정")
 st.session_state.task = st.sidebar.radio(
-    "Task Type", 
+    "작업 유형 (Task)", 
     options=["logit", "decision_tree"], 
     index=0,
-    help="logit: Classification (0/1) | decision_tree: Regression (Numeric)"
+    help="logit: 분류(0/1) | decision_tree: 회귀(수치예측)"
 )
 
-if st.session_state.step >= 4:
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("⚖️ Model Weights")
-    reg_weight = st.sidebar.slider(
-        "Regression Weight", 0.0, 1.0, 
-        value=st.session_state.models["mixed_weights"]["regression"], step=0.1
-    )
-    st.session_state.models["mixed_weights"]["regression"] = reg_weight
-    st.session_state.models["mixed_weights"]["decision_tree"] = 1.0 - reg_weight
-    st.sidebar.info(f"Tree Weight: {1.0 - reg_weight:.1f}")
-
 # --------------------------------------------------------------------------
-# 3. 主逻辑 (Main Logic)
+# 3. 메인 로직
 # --------------------------------------------------------------------------
-st.title("⚡ High-Performance Hybrid Framework")
+st.title("⚡ 오류 수정된 하이브리드 프레임워크")
 
-# [Step 0] 初始画面
+# [Step 0] 초기 화면
 if st.session_state.step == 0:
     st.markdown("""
-    ### 👋 Welcome!
+    ### 👋 안녕하세요!
     
-    此版本已包含 **Target Variable 自动清洗功能**。
+    이전 코드에서 발생하던 문제를 해결했습니다.
+    특히 **'Step 3. 데이터 전처리'** 단계에서 타겟 변수의 이상치(문자, NaN 등)를 처리하다가
+    **데이터가 모두 사라지는 문제**를 방지하는 안전장치를 추가했습니다.
     
-    #### 🧹 自动清洗逻辑:
-    * **回归任务**: 自动删除 Target 中的非数字、NaN、Infinity。
-    * **分类任务**: 自动删除 Target 中的空值。
-    
-    👈 请点击左侧 **'1. Upload Data'** 开始。
+    👈 왼쪽 **'1. 데이터 업로드'**부터 시작해주세요.
     """)
 
-# [Step 1] 数据上传
+# [Step 1] 데이터 업로드
 elif st.session_state.step == 1:
-    st.subheader("📂 Upload Data")
+    st.subheader("📂 데이터 파일 업로드")
     
     def load_csv_safe(file_buffer):
+        # 여러 인코딩 시도
         encodings = ['utf-8', 'cp949', 'euc-kr', 'latin1']
         for enc in encodings:
             try:
@@ -100,112 +89,131 @@ elif st.session_state.step == 1:
                 continue
         return None, None
 
-    uploaded_file = st.file_uploader("Select CSV / Excel / Parquet", type=["csv", "xlsx", "parquet"])
+    uploaded_file = st.file_uploader("파일 선택 (CSV / Excel)", type=["csv", "xlsx", "parquet"])
     
     if uploaded_file:
         try:
             if uploaded_file.name.endswith('.csv'):
                 df, enc = load_csv_safe(uploaded_file)
                 if df is not None:
-                    st.success(f"✅ Loaded CSV! (Encoding: {enc})")
+                    st.success(f"✅ CSV 로드 성공! (적용된 인코딩: {enc})")
                     st.session_state.data["merged"] = df
                 else:
-                    st.error("❌ Failed to read CSV encoding.")
+                    st.error("❌ 파일 인코딩을 읽을 수 없습니다.")
             elif uploaded_file.name.endswith('.xlsx'):
                 df = pd.read_excel(uploaded_file)
                 st.session_state.data["merged"] = df
-                st.success("✅ Loaded Excel!")
+                st.success("✅ Excel 로드 성공!")
             else:
                 df = pd.read_parquet(uploaded_file)
                 st.session_state.data["merged"] = df
-                st.success("✅ Loaded Parquet!")
+                st.success("✅ Parquet 로드 성공!")
                 
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"파일 열기 오류: {e}")
 
     if st.session_state.data["merged"] is not None:
+        st.write("데이터 미리보기:")
         st.dataframe(st.session_state.data["merged"].head())
 
-# [Step 2] 可视化
+# [Step 2] 시각화
 elif st.session_state.step == 2:
-    st.subheader("📊 Visualization")
+    st.subheader("📊 데이터 시각화")
     if st.session_state.data["merged"] is None:
-        st.warning("Please upload data first.")
+        st.warning("데이터를 먼저 업로드해주세요.")
     else:
         df = st.session_state.data["merged"]
         all_cols = df.columns.tolist()
         
         c1, c2, c3 = st.columns(3)
-        with c1: x_var = st.selectbox("X Axis", all_cols)
-        with c2: y_var = st.selectbox("Y Axis", all_cols, index=1 if len(all_cols)>1 else 0)
-        with c3: chart_type = st.selectbox("Chart Type", ["Scatter", "Bar", "Box", "Histogram"])
+        with c1: x_var = st.selectbox("X축 변수", all_cols)
+        with c2: y_var = st.selectbox("Y축 변수", all_cols, index=1 if len(all_cols)>1 else 0)
+        with c3: chart_type = st.selectbox("그래프 유형", ["Scatter", "Bar", "Box", "Histogram"])
         
-        if chart_type == "Scatter":
-            st.plotly_chart(px.scatter(df, x=x_var, y=y_var), use_container_width=True)
-        elif chart_type == "Bar":
-            st.plotly_chart(px.bar(df, x=x_var, y=y_var), use_container_width=True)
-        elif chart_type == "Box":
-            st.plotly_chart(px.box(df, x=x_var, y=y_var), use_container_width=True)
-        elif chart_type == "Histogram":
-            st.plotly_chart(px.histogram(df, x=x_var), use_container_width=True)
+        try:
+            if chart_type == "Scatter":
+                st.plotly_chart(px.scatter(df, x=x_var, y=y_var), use_container_width=True)
+            elif chart_type == "Bar":
+                st.plotly_chart(px.bar(df, x=x_var, y=y_var), use_container_width=True)
+            elif chart_type == "Box":
+                st.plotly_chart(px.box(df, x=x_var, y=y_var), use_container_width=True)
+            elif chart_type == "Histogram":
+                st.plotly_chart(px.histogram(df, x=x_var), use_container_width=True)
+        except Exception as e:
+            st.error(f"그래프를 그릴 수 없습니다: {e}")
 
-# [Step 3] 数据预处理 (核心修改：清洗 Target)
+# [Step 3] 데이터 전처리 (안전장치 추가됨)
 elif st.session_state.step == 3:
-    st.subheader("🛠️ Preprocessing & Feature Selection")
+    st.subheader("🛠️ 데이터 전처리 및 변수 선택")
     
     if st.session_state.data["merged"] is None:
-        st.error("No data uploaded.")
+        st.error("데이터가 없습니다.")
     else:
         df = st.session_state.data["merged"]
         cols = df.columns.tolist()
         
         c1, c2 = st.columns([1, 2])
         with c1:
-            target_col = st.selectbox("🎯 Target Variable (Y)", cols)
+            target_col = st.selectbox("🎯 타겟 변수 (Target)", cols)
         with c2:
             candidates = [c for c in cols if c != target_col]
-            selected_features = st.multiselect("📋 Input Features (X)", candidates, default=candidates[:5])
+            selected_features = st.multiselect("📋 입력 변수 (X)", candidates, default=candidates[:5])
         
         st.divider()
+        st.info("💡 아래 버튼을 누르면 타겟 변수의 '알 수 없는 값(NaN, 문자)' 등을 자동으로 제거합니다.")
         
-        if st.button("🚀 Run Preprocessing", type="primary"):
+        if st.button("🚀 전처리 실행 (변수 확정)", type="primary"):
             if not selected_features:
-                st.error("Please select at least 1 feature.")
+                st.error("입력 변수를 최소 1개 이상 선택해주세요.")
             else:
-                with st.spinner("Cleaning Target Variable & Processing..."):
+                with st.spinner("데이터 정제 중..."):
                     try:
                         clean_df = df.copy()
                         original_len = len(clean_df)
                         
-                        # --- 核心修改：清洗 Target ---
-                        # 1. 删除 Target 为空的行
+                        # -----------------------------------------------------
+                        # [안전장치] 타겟 변수 정제 로직
+                        # -----------------------------------------------------
+                        
+                        # 1. 일단 NaN(빈값) 제거
                         clean_df = clean_df.dropna(subset=[target_col])
                         
-                        # 2. 如果是回归任务(decision_tree)，必须保证 Target 是数字
+                        # 2. 회귀(숫자예측)인데 타겟이 문자인 경우 -> 숫자로 변환 시도
                         if st.session_state.task != "logit":
-                            # 强制转为数字，错误变 NaN
+                            # 숫자로 바꿀 수 없는 것(예: "Fail")은 NaN으로 변환
                             clean_df[target_col] = pd.to_numeric(clean_df[target_col], errors='coerce')
-                            # 再次删除 NaN
+                            # 변환 후 다시 NaN 제거
                             clean_df = clean_df.dropna(subset=[target_col])
-                            # 删除无穷大 inf
+                            # 무한대값 제거
                             clean_df = clean_df[~clean_df[target_col].isin([np.inf, -np.inf])]
                         
-                        cleaned_len = len(clean_df)
-                        dropped_count = original_len - cleaned_len
-                        
+                        # -----------------------------------------------------
+                        # [중요] 데이터가 모두 지워졌는지 확인 (Crash 방지)
+                        # -----------------------------------------------------
+                        if len(clean_df) == 0:
+                            st.error(f"🚨 오류: '{target_col}' 컬럼을 정제했더니 데이터가 0건이 되었습니다!")
+                            st.warning("이유: 선택하신 타겟 변수에 숫자가 아닌 값이 너무 많거나, 모두 비어있습니다.")
+                            st.stop() # 여기서 멈춤 (에러 방지)
+                            
+                        # 몇 건 지워졌는지 안내
+                        dropped_count = original_len - len(clean_df)
                         if dropped_count > 0:
-                            st.warning(f"⚠️ 已自动删除 Target 异常的 {dropped_count} 行数据 (NaN/Inf/Text).")
+                            st.success(f"⚠️ 타겟 변수에서 이상한 값 {dropped_count}개를 자동으로 삭제했습니다.")
                         
-                        # --- 正常的特征处理 ---
+                        # -----------------------------------------------------
+                        # 정상 진행
+                        # -----------------------------------------------------
                         X = clean_df[selected_features].copy()
                         y = clean_df[target_col].copy()
                         
+                        # 분류 문제인데 타겟이 문자열이면 숫자로 인코딩 (예: Yes/No -> 1/0)
                         le_target = None
                         if st.session_state.task == "logit" and y.dtype == 'object':
                             le_target = LabelEncoder()
                             y = le_target.fit_transform(y)
-                            st.info("ℹ️ Target converted to numbers for Classification.")
+                            st.info("ℹ️ 분류 분석을 위해 타겟 변수를 숫자로 변환했습니다.")
                         
+                        # Feature 전처리
                         num_cols = X.select_dtypes(include=['number']).columns.tolist()
                         cat_cols = X.select_dtypes(exclude=['number']).columns.tolist()
                         
@@ -213,16 +221,19 @@ elif st.session_state.step == 3:
                         scaler = StandardScaler()
                         encoders = {}
                         
+                        # 수치형 처리
                         if num_cols:
                             X[num_cols] = imputer.fit_transform(X[num_cols])
                             X[num_cols] = scaler.fit_transform(X[num_cols])
-                            
+                        
+                        # 범주형 처리
                         for col in cat_cols:
                             X[col] = X[col].fillna("Unknown").astype(str)
                             le = LabelEncoder()
                             X[col] = le.fit_transform(X[col])
                             encoders[col] = le
                             
+                        # 결과 저장
                         st.session_state.data["X_processed"] = X
                         st.session_state.data["y_processed"] = y
                         st.session_state.preprocess = {
@@ -232,30 +243,36 @@ elif st.session_state.step == 3:
                             "target_encoder": le_target
                         }
                         
-                        st.success(f"✅ Preprocessing Done!")
-                        st.markdown(f"**Final Data Shape**: {X.shape[0]} rows, **{X.shape[1]} cols**")
+                        st.success(f"✅ 전처리 완료! (사용 데이터: {len(X)}행)")
                         st.dataframe(X.head())
                         
                     except Exception as e:
-                        st.error(f"Error during preprocessing: {e}")
+                        st.error(f"전처리 중 알 수 없는 오류 발생: {e}")
 
-# [Step 4] 模型训练
+# [Step 4] 모델 학습
 elif st.session_state.step == 4:
-    st.subheader("🤖 Model Training")
+    st.subheader("🤖 모델 학습")
     
     if st.session_state.data["X_processed"] is None:
-        st.warning("Please finish Step 3 first.")
+        st.warning("먼저 [3. 데이터 전처리] 단계를 완료해주세요.")
     else:
         X = st.session_state.data["X_processed"]
         y = st.session_state.data["y_processed"]
         
-        st.info(f"Using **{X.shape[1]} features** for training.")
-        test_size = st.slider("Test Set Size", 0.1, 0.4, 0.2)
+        st.write(f"학습에 사용할 변수: **{X.shape[1]}개**")
+        test_size = st.slider("테스트 데이터 비율", 0.1, 0.4, 0.2)
         
-        if st.button("🔥 Start Training", type="primary"):
-            with st.spinner("Training Models..."):
+        if st.button("🔥 학습 시작", type="primary"):
+            with st.spinner("모델 학습 중..."):
                 try:
-                    stratify_opt = y if (st.session_state.task == "logit" and len(np.unique(y)) > 1) else None
+                    # 데이터 분할
+                    # 분류 문제일 때 계층적 샘플링(Stratify) 적용 시도
+                    stratify_opt = None
+                    if st.session_state.task == "logit":
+                        # 클래스 개수가 너무 적으면 stratify 에러 날 수 있음 -> 체크
+                        if len(np.unique(y)) > 1 and min(np.bincount(y)) > 1:
+                            stratify_opt = y
+                            
                     X_train, X_test, y_train, y_test = train_test_split(
                         X, y, test_size=test_size, random_state=42, stratify=stratify_opt
                     )
@@ -277,25 +294,27 @@ elif st.session_state.step == 4:
                         "y_train": y_train, "y_test": y_test
                     })
                     
-                    st.success("✅ Training Complete!")
+                    st.success("✅ 모델 학습 완료!")
                     c1, c2 = st.columns(2)
-                    c1.metric("Train Set", f"{len(X_train):,}")
-                    c2.metric("Test Set", f"{len(X_test):,}")
+                    c1.metric("학습 데이터", f"{len(X_train)}건")
+                    c2.metric("테스트 데이터", f"{len(X_test)}건")
                     
                 except Exception as e:
-                    st.error(f"Training Error: {e}")
+                    st.error(f"학습 중 오류 발생: {e}")
 
-# [Step 5] 预测
+# [Step 5] 예측
 elif st.session_state.step == 5:
-    st.subheader("🔮 Prediction")
+    st.subheader("🔮 예측 (Prediction)")
     
     if st.session_state.models["regression"] is None:
-        st.error("Model not trained.")
+        st.error("모델이 학습되지 않았습니다.")
     else:
+        # 예측 함수 정의
         def make_prediction(input_df):
             pp = st.session_state.preprocess
             X_input = input_df.copy()
             
+            # 없는 컬럼은 0으로 채우기
             for col in pp["feature_cols"]:
                 if col not in X_input.columns:
                     X_input[col] = 0
@@ -304,14 +323,17 @@ elif st.session_state.step == 5:
             num_cols = X_input.select_dtypes(include=['number']).columns
             cat_cols = X_input.select_dtypes(exclude=['number']).columns
             
+            # 스케일링 적용
             if len(num_cols) > 0 and pp["imputer"]:
                 X_input[num_cols] = pp["imputer"].transform(X_input[num_cols])
                 X_input[num_cols] = pp["scaler"].transform(X_input[num_cols])
-                
+            
+            # 인코딩 적용
             for col in cat_cols:
                 X_input[col] = X_input[col].fillna("Unknown").astype(str)
                 if col in pp["encoders"]:
                     le = pp["encoders"][col]
+                    # 학습 때 못 본 값은 0번 클래스로 대체 (에러 방지)
                     X_input[col] = X_input[col].apply(lambda x: x if x in le.classes_ else le.classes_[0])
                     X_input[col] = le.transform(X_input[col])
 
@@ -332,47 +354,57 @@ elif st.session_state.step == 5:
                 final_pred = (p1 * w_reg) + (p2 * w_dt)
                 return final_pred, None
 
-        mode = st.radio("Input Mode", ["Single Input", "File Upload"])
+        mode = st.radio("입력 방식", ["단일 입력", "파일 업로드"])
         
-        if mode == "Single Input":
+        if mode == "단일 입력":
             input_data = {}
             feats = st.session_state.preprocess["feature_cols"]
+            
+            # UI 깨짐 방지
             cols_ui = st.columns(3)
             for i, f in enumerate(feats):
                 with cols_ui[i % 3]:
                     input_data[f] = st.text_input(f, "0")
             
-            if st.button("Predict"):
-                df_single = pd.DataFrame([input_data])
-                for c in df_single.columns:
-                    try: df_single[c] = pd.to_numeric(df_single[c])
-                    except: pass
-                
-                pred, prob = make_prediction(df_single)
-                st.info(f"Result: {pred[0]}")
-                if prob is not None:
-                    st.write(f"Probability: {prob[0]:.4f}")
+            if st.button("결과 예측하기"):
+                try:
+                    df_single = pd.DataFrame([input_data])
+                    # 숫자 변환 시도
+                    for c in df_single.columns:
+                        try: df_single[c] = pd.to_numeric(df_single[c])
+                        except: pass
+                    
+                    pred, prob = make_prediction(df_single)
+                    st.success(f"예측 결과: {pred[0]}")
+                    if prob is not None:
+                        st.info(f"확률: {prob[0]:.4f}")
+                except Exception as e:
+                    st.error(f"예측 오류: {e}")
                     
         else:
-            up = st.file_uploader("Upload CSV for Prediction", type=["csv"])
+            up = st.file_uploader("예측할 CSV 파일", type=["csv"])
             if up:
                 df_batch = pd.read_csv(up)
-                if st.button("Predict Batch"):
-                    preds, probs = make_prediction(df_batch)
-                    df_batch["Prediction"] = preds
-                    if probs is not None:
-                        df_batch["Probability"] = probs
-                    st.dataframe(df_batch)
+                if st.button("일괄 예측 실행"):
+                    try:
+                        preds, probs = make_prediction(df_batch)
+                        df_batch["Prediction"] = preds
+                        if probs is not None:
+                            df_batch["Probability"] = probs
+                        st.dataframe(df_batch)
+                    except Exception as e:
+                        st.error(f"일괄 예측 오류: {e}")
 
-# [Step 6] 评估
+# [Step 6] 성능 평가
 elif st.session_state.step == 6:
-    st.subheader("📈 Evaluation")
+    st.subheader("📈 모델 성능 평가")
     
     if st.session_state.data["X_test"] is None:
-        st.error("Model not trained.")
+        st.error("모델 학습을 먼저 진행하세요.")
     else:
         X_test = st.session_state.data["X_test"]
         y_test = st.session_state.data["y_test"]
+        
         reg = st.session_state.models["regression"]
         dt = st.session_state.models["decision_tree"]
         w_reg = st.session_state.models["mixed_weights"]["regression"]
@@ -390,11 +422,13 @@ elif st.session_state.step == 6:
             except:
                 auc_score = 0.0
             
-            st.metric("Accuracy", f"{acc:.4f}")
+            st.metric("정확도 (Accuracy)", f"{acc:.4f}")
             st.metric("AUC Score", f"{auc_score:.4f}")
             
+            # ROC Curve
             fpr, tpr, _ = roc_curve(y_test, p_final)
-            fig = px.area(x=fpr, y=tpr, title="ROC Curve")
+            fig = px.area(x=fpr, y=tpr, title="ROC Curve", labels=dict(x="FPR", y="TPR"))
+            fig.add_shape(type='line', line=dict(dash='dash'), x0=0, x1=1, y0=0, y1=1)
             st.plotly_chart(fig, use_container_width=True)
             
         else:
@@ -411,5 +445,6 @@ elif st.session_state.step == 6:
             c2.metric("RMSE", f"{rmse:.4f}")
             c3.metric("R2 Score", f"{r2:.4f}")
             
-            fig = px.scatter(x=y_test, y=p_final, labels={'x': 'Actual', 'y': 'Predicted'}, title="Actual vs Predicted")
+            fig = px.scatter(x=y_test, y=p_final, labels={'x': '실제값', 'y': '예측값'}, title="Actual vs Predicted")
+            fig.add_shape(type='line', line=dict(dash='dash', color='red'), x0=y_test.min(), x1=y_test.max(), y0=y_test.min(), y1=y_test.max())
             st.plotly_chart(fig, use_container_width=True)

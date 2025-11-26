@@ -819,4 +819,3 @@ elif st.session_state.step == 6:
             
             fig_imp = px.bar(imp_df, x="Importance", y="Feature", orientation='h', title="Top 10 Feature Importance")
             st.plotly_chart(fig_imp, use_container_width=True)
-app.py

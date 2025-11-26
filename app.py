@@ -258,113 +258,206 @@ elif st.session_state.step == 2:
         else:
             st.warning("Y축(수치형 변수)을 선택하거나, 선택된 변수 목록에 수치형 데이터가 포함되어 있는지 확인해주세요.")
 # ----------------------
-# 단계 3：데이터 전처리
+# 단계 3：데이터 전처리 (Stepwise 기능 추가됨)
 # ----------------------
 elif st.session_state.step == 3:
-    st.subheader("🧹 데이터 전처리")
+    st.subheader("🧹 데이터 전처리 & 변수 선택")
     
     if st.session_state.data["merged"] is None:
         st.warning("먼저「데이터 업로드」단계를 완료하세요")
     else:
         df_merged = st.session_state.data["merged"]
         
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("### 데이터 기본 정보")
-            st.write(f"총 데이터: {len(df_merged):,} 행 × {len(df_merged.columns)} 열")
-            st.dataframe(df_merged.dtypes.value_counts().reset_index(), use_container_width=True)
-        with col2:
-            st.markdown("### 결측값 분포")
-            missing_info = df_merged.isnull().sum()[df_merged.isnull().sum() > 0].reset_index()
-            if len(missing_info) > 0:
-                missing_info.columns = ["필드명", "결측값"]
-                st.dataframe(missing_info, use_container_width=True)
+        # 탭 분리: 기본 전처리와 고급 변수 선택
+        tab_basic, tab_stepwise = st.tabs(["1️⃣ 기본 전처리 (필수)", "2️⃣ [진화] Stepwise 변수 선택"])
+        
+        # =========================================================
+        # Tab 1: 기본 전처리 (기존 로직 유지)
+        # =========================================================
+        with tab_basic:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("### 데이터 기본 정보")
+                st.write(f"총 데이터: {len(df_merged):,} 행 × {len(df_merged.columns)} 열")
+            with col2:
+                st.markdown("### 결측값 분포")
+                missing_sum = df_merged.isnull().sum()
+                missing_info = missing_sum[missing_sum > 0].reset_index()
+                if len(missing_info) > 0:
+                    missing_info.columns = ["필드명", "결측값"]
+                    st.dataframe(missing_info, use_container_width=True, height=150)
+                else:
+                    st.success("결측값이 없습니다.")
+            
+            st.divider()
+            st.markdown("### ⚙️ 전처리 설정")
+            
+            # 1. 타겟 열 선택
+            if len(df_merged.columns) > 0:
+                target_col = st.selectbox("타겟 열 선택 (예측 대상)", options=df_merged.columns, index=0)
+                st.session_state.preprocess["target_col"] = target_col
             else:
-                st.success("결측값이 없습니다.")
-        
-        st.divider()
-        st.markdown("### ⚙️ 전처리 설정")
-        
-        # 1. 타겟 열 선택
-        if len(df_merged.columns) > 0:
-            target_col = st.selectbox("타겟 열 선택 (예측 대상)", options=df_merged.columns, index=0)
-            st.session_state.preprocess["target_col"] = target_col
-        else:
-            st.error("데이터에 열이 없습니다.")
-            st.stop()
-        
-        # [수정 3] 분석 유형(Task) 선택 추가
-        st.markdown("#### 분석 유형 선택")
-        task_choice = st.radio("이 데이터의 예측 목표는 무엇입니까?", 
-                             ["분류 (예: 합격/불합격, 0/1)", "회귀 (예: 가격, 수량, 점수)"])
-        st.session_state.task = "logit" if "분류" in task_choice else "regression"
-            
-        # 2. 특징 열 선택
-        exclude_cols = st.multiselect("제외할 열 선택 (ID 등 무관한 필드)", 
-                                    options=[c for c in df_merged.columns if c != target_col])
-        feature_cols = [c for c in df_merged.columns if c not in exclude_cols + [target_col]]
-        st.session_state.preprocess["feature_cols"] = feature_cols
-        
-        if not feature_cols:
-            st.warning("특징 열이 선택되지 않았습니다.")
-            
-        # 3. 전처리 옵션
-        col_p1, col_p2 = st.columns(2)
-        with col_p1:
-            impute_strategy = st.selectbox("수치형 결측값 채우기", ["중앙값", "평균값", "최빈값"])
-            impute_strategy_map = {"중앙값": "median", "평균값": "mean", "최빈값": "most_frequent"}
-        with col_p2:
-            cat_encoding = st.selectbox("범주형 인코딩", ["레이블 인코딩", "원-핫 인코딩"])
-            
-        if st.button("전처리 및 변환 시작", type="primary"):
-            if not feature_cols:
-                st.error("특징 열이 없습니다.")
+                st.error("데이터에 열이 없습니다.")
                 st.stop()
             
-            try:
-                X = df_merged[feature_cols].copy()
-                y = df_merged[target_col].copy()
+            # 분석 유형 선택
+            st.markdown("#### 분석 유형 선택")
+            task_choice = st.radio("이 데이터의 예측 목표는 무엇입니까?", 
+                                 ["분류 (예: 합격/불합격, 0/1)", "회귀 (예: 가격, 수량, 점수)"])
+            st.session_state.task = "logit" if "분류" in task_choice else "regression"
                 
-                num_cols = X.select_dtypes(include=["int64", "float64"]).columns
-                cat_cols = X.select_dtypes(include=["object", "category"]).columns
+            # 2. 특징 열 선택
+            exclude_cols = st.multiselect("제외할 열 선택 (ID 등 무관한 필드)", 
+                                        options=[c for c in df_merged.columns if c != target_col])
+            feature_cols = [c for c in df_merged.columns if c not in exclude_cols + [target_col]]
+            
+            # 3. 전처리 옵션
+            col_p1, col_p2 = st.columns(2)
+            with col_p1:
+                impute_strategy = st.selectbox("수치형 결측값 채우기", ["중앙값", "평균값", "최빈값"])
+                impute_strategy_map = {"중앙값": "median", "평균값": "mean", "최빈값": "most_frequent"}
+            with col_p2:
+                cat_encoding = st.selectbox("범주형 인코딩", ["레이블 인코딩", "원-핫 인코딩"])
                 
-                # 수치형 처리
-                imputer = SimpleImputer(strategy=impute_strategy_map[impute_strategy])
-                if len(num_cols) > 0:
-                    X[num_cols] = imputer.fit_transform(X[num_cols])
+            if st.button("전처리 실행 (변환)", type="primary"):
+                if not feature_cols:
+                    st.error("특징 열이 없습니다.")
+                    st.stop()
+                
+                try:
+                    # 데이터 분리
+                    X = df_merged[feature_cols].copy()
+                    y = df_merged[target_col].copy()
+                    
+                    # 타입별 컬럼 분리
+                    num_cols = X.select_dtypes(include=["int64", "float64"]).columns
+                    cat_cols = X.select_dtypes(include=["object", "category"]).columns
+                    
+                    # 1. 수치형 결측값 처리 & 스케일링
+                    imputer = SimpleImputer(strategy=impute_strategy_map[impute_strategy])
                     scaler = StandardScaler()
-                    X[num_cols] = scaler.fit_transform(X[num_cols])
-                else:
-                    scaler = StandardScaler() # 빈 scaler
-                
-                # 범주형 처리
-                encoders = {}
-                for col in cat_cols:
-                    X[col] = X[col].fillna("알 수 없음").astype(str)
-                    if cat_encoding == "레이블 인코딩":
-                        le = LabelEncoder()
-                        X[col] = le.fit_transform(X[col])
-                        encoders[col] = le
-                    else:
-                        ohe = OneHotEncoder(sparse_output=False, drop="first", handle_unknown='ignore')
-                        ohe_result = ohe.fit_transform(X[[col]])
-                        ohe_cols = [f"{col}_{cat}" for cat in ohe.categories_[0][1:]]
-                        X = pd.concat([X.drop(col, axis=1), pd.DataFrame(ohe_result, columns=ohe_cols)], axis=1)
-                        encoders[col] = (ohe, ohe_cols)
-                
-                st.session_state.preprocess.update({
-                    "imputer": imputer, "scaler": scaler, "encoders": encoders, 
-                    "feature_cols": list(X.columns)
-                })
-                st.session_state.data["X_processed"] = X
-                st.session_state.data["y_processed"] = y
-                
-                st.success("✅ 전처리 완료!")
-                st.dataframe(X.head(3))
-                
-            except Exception as e:
-                st.error(f"전처리 오류: {str(e)}")
+                    
+                    if len(num_cols) > 0:
+                        X[num_cols] = imputer.fit_transform(X[num_cols])
+                        X[num_cols] = scaler.fit_transform(X[num_cols])
+                    
+                    # 2. 범주형 인코딩
+                    encoders = {}
+                    for col in cat_cols:
+                        X[col] = X[col].fillna("알 수 없음").astype(str)
+                        if cat_encoding == "레이블 인코딩":
+                            le = LabelEncoder()
+                            X[col] = le.fit_transform(X[col])
+                            encoders[col] = le
+                        else:
+                            ohe = OneHotEncoder(sparse_output=False, drop="first", handle_unknown='ignore')
+                            ohe_result = ohe.fit_transform(X[[col]])
+                            ohe_cols = [f"{col}_{cat}" for cat in ohe.categories_[0][1:]]
+                            X = pd.concat([X.drop(col, axis=1), pd.DataFrame(ohe_result, columns=ohe_cols)], axis=1)
+                            encoders[col] = (ohe, ohe_cols)
+                    
+                    # 세션에 저장
+                    st.session_state.preprocess.update({
+                        "imputer": imputer, "scaler": scaler, "encoders": encoders, 
+                        "feature_cols": list(X.columns) # 인코딩 후의 컬럼 리스트
+                    })
+                    st.session_state.data["X_processed"] = X
+                    st.session_state.data["y_processed"] = y
+                    
+                    st.success("✅ 기본 전처리 완료! 옆의 'Stepwise 변수 선택' 탭으로 이동해보세요.")
+                    st.dataframe(X.head(3))
+                    
+                except Exception as e:
+                    st.error(f"전처리 오류: {str(e)}")
 
+        # =========================================================
+        # Tab 2: Stepwise 변수 선택 (프로세스 시각화)
+        # =========================================================
+        with tab_stepwise:
+            st.markdown("### 🧬 Stepwise (Forward Selection) 프로세스")
+            st.info("💡 **전처리 실행 후** 사용 가능합니다. 알고리즘이 변수를 하나씩 추가하며 성능 변화를 추적합니다.")
+            
+            if "X_processed" not in st.session_state.data or st.session_state.data["X_processed"] is None:
+                st.warning("⚠️ 먼저 '기본 전처리' 탭에서 전처리를 실행해주세요.")
+            else:
+                X = st.session_state.data["X_processed"]
+                y = st.session_state.data["y_processed"]
+                current_features = list(X.columns)
+                
+                col_s1, col_s2 = st.columns([1, 3])
+                with col_s1:
+                    st.write(f"**전체 변수 후보**: {len(current_features)}개")
+                    max_vars = st.slider("최대 선택 변수 개수", 1, len(current_features), min(10, len(current_features)))
+                    start_stepwise = st.button("🚀 Stepwise 시작")
+                
+                with col_s2:
+                    if start_stepwise:
+                        # Stepwise 로직 (간소화된 Forward Selection)
+                        selected_features = []
+                        remaining_features = current_features.copy()
+                        history = []  # 그래프용 기록
+                        
+                        placeholder_chart = st.empty() # 차트 갱신용
+                        placeholder_text = st.empty()  # 텍스트 갱신용
+                        
+                        # 모델 설정
+                        if st.session_state.task == "logit":
+                            est = LogisticRegression(max_iter=500, solver='liblinear')
+                            scoring_metric = "Accuracy"
+                        else:
+                            est = LinearRegression()
+                            scoring_metric = "R2 Score"
+                            
+                        # 반복 시작
+                        progress_bar = st.progress(0)
+                        
+                        for i in range(max_vars):
+                            best_score = -np.inf
+                            best_feature = None
+                            
+                            # 남은 변수들 중 가장 좋은 것 하나 찾기
+                            for feature in remaining_features:
+                                trial_features = selected_features + [feature]
+                                X_subset = X[trial_features]
+                                
+                                # 간단한 검증 (Train set 내에서 split)
+                                X_tr, X_val, y_tr, y_val = train_test_split(X_subset, y, test_size=0.2, random_state=42)
+                                est.fit(X_tr, y_tr)
+                                score = est.score(X_val, y_val)
+                                
+                                if score > best_score:
+                                    best_score = score
+                                    best_feature = feature
+                            
+                            # 결과 기록
+                            if best_feature:
+                                selected_features.append(best_feature)
+                                remaining_features.remove(best_feature)
+                                history.append({"Step": i+1, "Added Feature": best_feature, "Score": best_score})
+                                
+                                # 실시간 업데이트
+                                placeholder_text.markdown(f"**Step {i+1}**: `+ {best_feature}` 추가됨 (Score: {best_score:.4f})")
+                                progress_bar.progress((i + 1) / max_vars)
+                                
+                                # 실시간 차트 그리기
+                                df_hist = pd.DataFrame(history)
+                                fig = px.line(df_hist, x="Step", y="Score", markers=True, 
+                                              title=f"Stepwise Selection Process ({scoring_metric})",
+                                              hover_data=["Added Feature"])
+                                placeholder_chart.plotly_chart(fig, use_container_width=True)
+                        
+                        st.success("✅ 변수 선택 완료!")
+                        
+                        # 결과 테이블 표시
+                        st.markdown("#### 📜 선택 과정 상세")
+                        st.dataframe(pd.DataFrame(history), use_container_width=True)
+                        
+                        # 최종 적용 버튼
+                        st.markdown("---")
+                        if st.button("🎯 이 변수 조합 적용하기 (모델 학습에 사용)"):
+                            st.session_state.preprocess["feature_cols"] = selected_features
+                            st.session_state.data["X_processed"] = X[selected_features]
+                            st.success(f"✅ 상위 {len(selected_features)}개 변수가 적용되었습니다! 이제 '모델 학습' 단계로 이동하세요.")
 # ----------------------
 # 단계 4：모델 학습
 # ----------------------

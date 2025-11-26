@@ -158,7 +158,7 @@ elif st.session_state.step == 1:
             st.write(df_merged.dtypes.value_counts().to_string())
 
 # ----------------------
-# 단계 2：데이터 시각화
+# 단계 2：데이터 시각화 (수정됨)
 # ----------------------
 elif st.session_state.step == 2:
     st.subheader("📊 데이터 시각화")
@@ -167,14 +167,44 @@ elif st.session_state.step == 2:
         st.warning("먼저「데이터 업로드」단계를 완료하세요")
     else:
         df = st.session_state.data["merged"]
-        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
-        num_cols = df.select_dtypes(include=["int64", "float64"]).columns.tolist()
+        
+        # --- [추가 기능] 변수 선택 (Variable Selection) ---
+        st.markdown("### 1️⃣ 시각화할 변수 선택")
+        st.caption("데이터의 변수가 많을 경우, 분석하고 싶은 변수만 선택해서 시각화할 수 있습니다.")
+        
+        all_cols = df.columns.tolist()
+        # 기본적으로 상위 10개 혹은 전체 선택
+        default_selection = all_cols[:10] if len(all_cols) > 10 else all_cols
+        
+        selected_cols = st.multiselect(
+            "분석 대상 변수 선택 (다중 선택 가능)",
+            options=all_cols,
+            default=default_selection,
+            placeholder="변수를 선택하세요..."
+        )
+        
+        if not selected_cols:
+            st.error("⚠️ 최소 하나 이상의 변수를 선택해야 시각화가 가능합니다.")
+            st.stop()
+            
+        # 선택된 데이터만 필터링하여 시각화용 데이터프레임 생성
+        df_vis = df[selected_cols]
+        st.divider()
+        
+        # --- 기존 시각화 로직 (선택된 변수만 적용) ---
+        st.markdown("### 2️⃣ 그래프 설정")
+        
+        # 필터링된 df_vis를 기준으로 데이터 타입 분류
+        cat_cols = df_vis.select_dtypes(include=["object", "category"]).columns.tolist()
+        num_cols = df_vis.select_dtypes(include=["int64", "float64"]).columns.tolist()
         
         col1, col2, col3 = st.columns(3)
         with col1:
+            # 선택된 변수 내에서만 옵션 제공
             x_var = st.selectbox("📋 X축：범주형 변수", options=["선택 안 함"] + cat_cols, index=0)
             x_var = None if x_var == "선택 안 함" else x_var
         with col2:
+            # 선택된 변수 내에서만 옵션 제공
             y_var = st.selectbox("📈 Y축：수치형 변수", options=num_cols, index=0 if num_cols else None)
         with col3:
             graph_types = [
@@ -184,6 +214,8 @@ elif st.session_state.step == 2:
             graph_type = st.selectbox("📊 그래프 유형", options=graph_types, index=0)
         
         st.divider()
+        
+        # 시각화 그리기 로직 (df 대신 df_vis 사용해도 되지만, 컬럼이 존재하므로 df 사용 무방)
         if y_var:
             if graph_type == "히스토그램（분포）":
                 st.markdown(f"### {y_var} 분포（히스토그램）")
@@ -224,8 +256,7 @@ elif st.session_state.step == 2:
                     except Exception as e:
                         st.error(f"그래프 생성 실패: {str(e)}")
         else:
-            st.warning("Y축(수치형 변수)을 선택해주세요.")
-
+            st.warning("Y축(수치형 변수)을 선택하거나, 선택된 변수 목록에 수치형 데이터가 포함되어 있는지 확인해주세요.")
 # ----------------------
 # 단계 3：데이터 전처리
 # ----------------------

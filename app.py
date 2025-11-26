@@ -255,7 +255,7 @@ elif st.session_state.step == 2:
                 st.info("Y축 변수를 선택하면 그래프가 표시됩니다.")
 
 # ----------------------
-# 단계 3：데이터 전처리 & 변수 선택 (수정됨)
+# 단계 3：데이터 전처리 & 변수 선택 (오류 수정 버전)
 # ----------------------
 elif st.session_state.step == 3:
     st.subheader("🧹 데이터 전처리 & 변수 선택")
@@ -263,7 +263,7 @@ elif st.session_state.step == 3:
     if st.session_state.data["merged"] is None:
         st.warning("⚠️ 먼저 '데이터 업로드' 단계를 완료하세요.")
     else:
-        # 원본 데이터 안전하게 가져오기
+        # 원본 데이터 안전하게 가져오기 (인덱스 초기화가 핵심)
         df_origin = st.session_state.data["merged"].copy().reset_index(drop=True)
         all_cols = df_origin.columns.tolist()
 
@@ -302,7 +302,7 @@ elif st.session_state.step == 3:
                 if st.button("🚀 전처리 시작 (결측치+인코딩)", type="primary"):
                     with st.spinner("데이터 변환 중..."):
                         try:
-                            # [핵심 수정] 선택된 컬럼만 추출하고 인덱스 완전 초기화
+                            # [핵심 수정 1] 인덱스 완전 초기화로 길이 불일치 방지
                             X = df_origin[selected_features].copy().reset_index(drop=True)
                             y = df_origin[target_col].copy().reset_index(drop=True)
                             
@@ -315,10 +315,16 @@ elif st.session_state.step == 3:
                             scaler = StandardScaler()
                             
                             if num_cols:
-                                # [수정] DataFrame 할당 시 인덱스 매칭 문제 방지를 위해 .values 사용
+                                # [핵심 수정 2] 결과 배열을 DataFrame으로 명시적 변환 후 할당
+                                # 이렇게 해야 인덱스와 컬럼명이 꼬이지 않습니다.
                                 X_imputed = imputer.fit_transform(X[num_cols])
                                 X_scaled = scaler.fit_transform(X_imputed)
-                                X[num_cols] = X_scaled  # numpy array를 직접 할당하여 인덱스 무시
+                                
+                                X[num_cols] = pd.DataFrame(
+                                    X_scaled, 
+                                    columns=num_cols, 
+                                    index=X.index  # 인덱스 강제 일치
+                                )
                             
                             # 2. 범주형 처리 (Label Encoding)
                             encoders = {}
@@ -327,8 +333,13 @@ elif st.session_state.step == 3:
                                 X[col] = X[col].fillna("Unknown").astype(str)
                                 
                                 le = LabelEncoder()
-                                # fit_transform 결과를 바로 할당
-                                X[col] = le.fit_transform(X[col])
+                                transformed_data = le.fit_transform(X[col])
+                                
+                                # [핵심 수정 3] Series로 변환하여 인덱스 맞춰서 할당
+                                X[col] = pd.Series(
+                                    transformed_data, 
+                                    index=X.index # 인덱스 강제 일치
+                                )
                                 encoders[col] = le
                             
                             # 3. 결과 저장 (전역 상태)
@@ -337,8 +348,8 @@ elif st.session_state.step == 3:
                                 "imputer": imputer if num_cols else None,
                                 "scaler": scaler if num_cols else None,
                                 "encoders": encoders,
-                                "num_cols": num_cols, # 추후 예측을 위해 저장
-                                "cat_cols": cat_cols  # 추후 예측을 위해 저장
+                                "num_cols": num_cols,
+                                "cat_cols": cat_cols
                             })
                             
                             st.session_state.data["X_processed"] = X
@@ -349,7 +360,7 @@ elif st.session_state.step == 3:
                             
                         except Exception as e:
                             st.error(f"❌ 전처리 오류 발생: {str(e)}")
-                            st.warning("데이터의 인덱스 문제이거나 특수문자가 포함된 컬럼일 수 있습니다.")
+                            st.info("💡 팁: 데이터프레임 인덱스 문제일 가능성이 높습니다. 위 코드는 인덱스를 강제로 재정렬하여 해결을 시도합니다.")
 
             with tab_imp:
                 if "X_processed" in st.session_state.data and st.session_state.data["X_processed"] is not None:

@@ -725,13 +725,5 @@ elif st.session_state.step == 6:
                         x0=y_test.min(), x1=y_test.max(), y0=y_test.min(), y1=y_test.max())
             st.plotly_chart(fig, width='stretch')
             
-        #  중요도 (Tree 기준)
-        if hasattr(dt_model, "feature_importances_"):
-            st.markdown("### 🌳 변수 중요도 (의사결정나무 기준)")
-            imp_df = pd.DataFrame({
-                "Feature": st.session_state.preprocess["feature_cols"],
-                "Importance": dt_model.feature_importances_
-            }).sort_values("Importance", ascending=False).head(10)
+        
             
-            fig_imp = px.bar(imp_df, x="Importance", y="Feature", orientation='h', title="Top 10 Feature Importance")
-            st.plotly_chart(fig_imp, width='stretch')

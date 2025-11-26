@@ -255,7 +255,7 @@ elif st.session_state.step == 2:
                 st.info("Y축 변수를 선택하면 그래프가 표시됩니다.")
 
 # ----------------------
-# 단계 3：데이터 전처리 & 변수 선택 (선택 변수만 처리)
+# 단계 3：데이터 전처리 & 변수 선택 (수정됨)
 # ----------------------
 elif st.session_state.step == 3:
     st.subheader("🧹 데이터 전처리 & 변수 선택")
@@ -263,35 +263,37 @@ elif st.session_state.step == 3:
     if st.session_state.data["merged"] is None:
         st.warning("⚠️ 먼저 '데이터 업로드' 단계를 완료하세요.")
     else:
-        # 원본 데이터 안전하게 가져오기 (인덱스 리셋)
+        # 원본 데이터 안전하게 가져오기
         df_origin = st.session_state.data["merged"].copy().reset_index(drop=True)
         all_cols = df_origin.columns.tolist()
 
         st.markdown("### 1️⃣ 분석에 사용할 변수 선택 (Selection)")
         
-        # 1. 타겟 변수(Y) 선택
-        target_col = st.selectbox("🎯 타겟 변수 (Y) 선택", options=all_cols)
-        st.session_state.preprocess["target_col"] = target_col
+        col1, col2 = st.columns(2)
+        with col1:
+            # 1. 타겟 변수(Y) 선택
+            target_col = st.selectbox("🎯 타겟 변수 (Y) 선택", options=all_cols)
         
-        # 2. 입력 변수(X) 다중 선택
         # 타겟을 제외한 나머지 변수들을 옵션으로 제공
         feature_candidates = [c for c in all_cols if c != target_col]
         
-        # 기본적으로 너무 많은 컬럼이 선택되지 않도록 상위 10개만 기본 선택
-        default_feats = feature_candidates[:10] if len(feature_candidates) > 10 else feature_candidates
-        
-        selected_features = st.multiselect(
-            "📋 입력 변수 (X) 선택 (이 변수들만 전처리합니다)",
-            options=feature_candidates,
-            default=default_feats
-        )
+        # 2. 입력 변수(X) 다중 선택
+        with col2:
+            default_feats = feature_candidates[:10] if len(feature_candidates) > 10 else feature_candidates
+            selected_features = st.multiselect(
+                "📋 입력 변수 (X) 선택",
+                options=feature_candidates,
+                default=default_feats
+            )
         
         st.divider()
 
         if not selected_features:
             st.warning("⚠️ 분석할 변수를 최소 1개 이상 선택해주세요.")
         else:
-            # 탭 구성
+            # 상태 저장
+            st.session_state.preprocess["target_col"] = target_col
+            
             tab_proc, tab_imp = st.tabs(["⚡ 선택된 변수 전처리 실행", "📊 변수 중요도 확인"])
             
             with tab_proc:
@@ -300,8 +302,7 @@ elif st.session_state.step == 3:
                 if st.button("🚀 전처리 시작 (결측치+인코딩)", type="primary"):
                     with st.spinner("데이터 변환 중..."):
                         try:
-                            # [핵심 로직] 선택된 컬럼만 별도 데이터프레임으로 추출 (Subset)
-                            # 인덱스를 리셋하여 차원 불일치 문제 원천 차단
+                            # [핵심 수정] 선택된 컬럼만 추출하고 인덱스 완전 초기화
                             X = df_origin[selected_features].copy().reset_index(drop=True)
                             y = df_origin[target_col].copy().reset_index(drop=True)
                             
@@ -314,10 +315,10 @@ elif st.session_state.step == 3:
                             scaler = StandardScaler()
                             
                             if num_cols:
-                                # fit_transform 결과는 numpy array이므로 다시 DF로 변환해야 안전함
-                                X_num_arr = imputer.fit_transform(X[num_cols])
-                                X_num_arr = scaler.fit_transform(X_num_arr)
-                                X[num_cols] = pd.DataFrame(X_num_arr, columns=num_cols, index=X.index)
+                                # [수정] DataFrame 할당 시 인덱스 매칭 문제 방지를 위해 .values 사용
+                                X_imputed = imputer.fit_transform(X[num_cols])
+                                X_scaled = scaler.fit_transform(X_imputed)
+                                X[num_cols] = X_scaled  # numpy array를 직접 할당하여 인덱스 무시
                             
                             # 2. 범주형 처리 (Label Encoding)
                             encoders = {}
@@ -326,45 +327,50 @@ elif st.session_state.step == 3:
                                 X[col] = X[col].fillna("Unknown").astype(str)
                                 
                                 le = LabelEncoder()
-                                # Series로 변환하여 할당 (인덱스 매칭 보장)
-                                X[col] = pd.Series(le.fit_transform(X[col]), index=X.index)
+                                # fit_transform 결과를 바로 할당
+                                X[col] = le.fit_transform(X[col])
                                 encoders[col] = le
                             
                             # 3. 결과 저장 (전역 상태)
-                            st.session_state.preprocess["feature_cols"] = selected_features
-                            st.session_state.preprocess["imputer"] = imputer if num_cols else None
-                            st.session_state.preprocess["scaler"] = scaler if num_cols else None
-                            st.session_state.preprocess["encoders"] = encoders
+                            st.session_state.preprocess.update({
+                                "feature_cols": selected_features,
+                                "imputer": imputer if num_cols else None,
+                                "scaler": scaler if num_cols else None,
+                                "encoders": encoders,
+                                "num_cols": num_cols, # 추후 예측을 위해 저장
+                                "cat_cols": cat_cols  # 추후 예측을 위해 저장
+                            })
                             
                             st.session_state.data["X_processed"] = X
                             st.session_state.data["y_processed"] = y
                             
                             st.success("✅ 전처리 완료! 데이터 형식이 모델 학습에 맞게 변환되었습니다.")
-                            st.write("▼ 변환된 데이터 미리보기 (상위 3행)")
-                            st.dataframe(X.head(3))
+                            st.dataframe(X.head(3), use_container_width=True)
                             
                         except Exception as e:
                             st.error(f"❌ 전처리 오류 발생: {str(e)}")
-                            st.warning("팁: 데이터에 섞여있는 특수문자나 인덱스 문제일 수 있습니다.")
+                            st.warning("데이터의 인덱스 문제이거나 특수문자가 포함된 컬럼일 수 있습니다.")
 
             with tab_imp:
-                if "X_processed" in st.session_state.data:
+                if "X_processed" in st.session_state.data and st.session_state.data["X_processed"] is not None:
                     st.markdown("##### 🧬 변수 중요도 (Feature Importance)")
                     if st.button("중요도 분석 실행"):
                         X_p = st.session_state.data["X_processed"]
                         y_p = st.session_state.data["y_processed"]
                         
-                        # 간단한 트리 모델로 중요도 산출
+                        # 모델 선택
                         model = DecisionTreeClassifier(max_depth=5) if st.session_state.task == "logit" else DecisionTreeRegressor(max_depth=5)
-                        model.fit(X_p, y_p)
-                        
-                        imp = pd.DataFrame({
-                            "Feature": X_p.columns,
-                            "Importance": model.feature_importances_
-                        }).sort_values("Importance", ascending=False)
-                        
-                        fig = px.bar(imp, x="Importance", y="Feature", orientation='h', title="변수 중요도 Top Features")
-                        st.plotly_chart(fig, use_container_width=True)
+                        try:
+                            model.fit(X_p, y_p)
+                            imp = pd.DataFrame({
+                                "Feature": X_p.columns,
+                                "Importance": model.feature_importances_
+                            }).sort_values("Importance", ascending=False)
+                            
+                            fig = px.bar(imp, x="Importance", y="Feature", orientation='h', title="변수 중요도 Top Features")
+                            st.plotly_chart(fig, use_container_width=True)
+                        except Exception as e:
+                            st.error(f"분석 실패: {e}")
                 else:
                     st.info("👈 먼저 [전처리 실행] 버튼을 눌러주세요.")
 # ----------------------

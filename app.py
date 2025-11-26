@@ -152,7 +152,7 @@ elif st.session_state.step == 1:
             st.write(", ".join(df_merged.columns.tolist()[:10]) + "...")
         with col2:
             st.write("**결측값 총 개수**")
-            st.write(f"{df_merged.isnull().sum().sum()} 개")
+            st.write(f"{df_merged.isnull().sum()} 개")
         with col3:
             st.write("**데이터 유형**")
             st.write(df_merged.dtypes.value_counts().to_string())

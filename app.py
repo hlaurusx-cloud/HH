@@ -1,365 +1,275 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
-import joblib
 import plotly.express as px
-import plotly.graph_objects as go
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, LabelEncoder, OneHotEncoder
+from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
-from sklearn.metrics import (
-    accuracy_score, auc, roc_curve, confusion_matrix,
-    mean_absolute_error, mean_squared_error, r2_score
-)
+from sklearn.metrics import accuracy_score, r2_score
 import warnings
 warnings.filterwarnings("ignore")
 
 # ----------------------
-# 1. 페이지 기본 설정 (단 한 번만 호출해야 함)
+# 1. 페이지 기본 설정 (파일 최상단에 위치)
 # ----------------------
 st.set_page_config(
-    page_title="하이브리드모형 동적 프레임워크（의사결정나무+회귀분석）",
+    page_title="하이브리드 분석 프레임워크",
     page_icon="📊",
     layout="wide"
 )
 
-# 전역 상태 관리
+# 전역 상태 초기화
 if "step" not in st.session_state:
-    st.session_state.step = 0  
+    st.session_state.step = 0
 if "data" not in st.session_state:
-    st.session_state.data = {"merged": None}  
+    st.session_state.data = {"merged": None}
 if "preprocess" not in st.session_state:
-    st.session_state.preprocess = {
-        "imputer": None, "scaler": None, "encoders": {}, 
-        "feature_cols": None, "target_col": None, "cat_modes": {} 
-    }
+    st.session_state.preprocess = {}
 if "models" not in st.session_state:
-    st.session_state.models = {
-        "regression": None, "decision_tree": None, 
-        "mixed_weights": {"regression": 0.5, "decision_tree": 0.5}
-    }
+    st.session_state.models = {"regression": None, "decision_tree": None, "mixed_weights": {"regression": 0.5, "decision_tree": 0.5}}
 if "task" not in st.session_state:
-    st.session_state.task = "logit" 
+    st.session_state.task = "logit"
 
 # ----------------------
-# 2. 사이드바
+# 2. 사이드바 메뉴
 # ----------------------
-st.sidebar.title("📌 작업 흐름")
-st.sidebar.divider()
-
-steps = ["초기 설정", "데이터 업로드", "데이터 시각화", "데이터 전처리", "모델 학습", "모델 예측", "성능 평가"]
-for i, step_name in enumerate(steps):
-    if st.sidebar.button(step_name, key=f"btn_{i}"):
-        st.session_state.step = i
+st.sidebar.title("📌 단계별 진행")
+steps = ["1. 데이터 업로드", "2. 데이터 시각화", "3. 데이터 전처리", "4. 모델 학습", "5. 예측 및 결과"]
+for i, s in enumerate(steps):
+    if st.sidebar.button(s, key=f"nav_{i}"):
+        st.session_state.step = i + 1  # 0번은 홈 화면이므로 1부터 시작
 
 st.sidebar.divider()
-st.sidebar.subheader("핵심 설정")
-st.session_state.task = st.sidebar.radio("작업 유형", options=["logit", "의사결정나무"], index=0)
-
-if st.session_state.step >= 4:
-    st.sidebar.subheader("하이브리드 가중치")
-    reg_weight = st.sidebar.slider(
-        "회귀 모델 가중치", 0.0, 1.0, 
-        value=st.session_state.models["mixed_weights"]["regression"], step=0.1
-    )
-    st.session_state.models["mixed_weights"]["regression"] = reg_weight
-    st.session_state.models["mixed_weights"]["decision_tree"] = 1 - reg_weight
-    st.sidebar.text(f"트리 모델 가중치: {1 - reg_weight:.1f}")
+st.sidebar.subheader("⚙️ 모델 설정")
+st.session_state.task = st.sidebar.radio("분석 유형", ["logit (분류)", "regression (회귀)"])
 
 # ----------------------
-# 3. 메인 페이지 로직
+# 3. 메인 로직
 # ----------------------
-st.title("📊 하이브리드모형 동적 배포 프레임워크")
+st.title("📊 하이브리드 분석 프레임워크")
 
-# Step 0: 초기 설정
+# [Step 0] 홈 화면
 if st.session_state.step == 0:
-    st.subheader("🎉 환영합니다")
-    st.markdown("""
-    이 프레임워크는 데이터 업로드부터 예측까지의 전 과정을 자동화합니다.
-    왼쪽 사이드바에서 **'데이터 업로드'**를 선택하여 시작하세요.
-    """)
+    st.info("왼쪽 사이드바에서 **'1. 데이터 업로드'**를 선택하여 시작하세요.")
 
-# Step 1: 데이터 업로드
+# [Step 1] 데이터 업로드
 elif st.session_state.step == 1:
     st.subheader("📤 데이터 업로드")
-    tab1, tab2 = st.tabs(["📂 파일 업로드", "💾 기본 데이터"])
-    
-    def load_csv_safe(file_buffer):
-        encodings = ['utf-8', 'cp949', 'euc-kr', 'latin1']
-        for enc in encodings:
-            try:
-                file_buffer.seek(0)
-                df = pd.read_csv(file_buffer, encoding=enc)
-                return df, enc
-            except:
-                continue
-        return None, "fail"
+    uploaded_file = st.file_uploader("CSV 파일 업로드", type=["csv", "xlsx"])
+    if uploaded_file:
+        try:
+            if uploaded_file.name.endswith('.csv'):
+                # 인코딩 자동 감지 시도
+                try:
+                    df = pd.read_csv(uploaded_file, encoding='utf-8')
+                except:
+                    uploaded_file.seek(0)
+                    df = pd.read_csv(uploaded_file, encoding='cp949')
+            else:
+                df = pd.read_excel(uploaded_file)
+            
+            st.session_state.data["merged"] = df
+            st.success(f"✅ 업로드 성공: {len(df)}행 {len(df.columns)}열")
+            st.dataframe(df.head())
+        except Exception as e:
+            st.error(f"파일 읽기 실패: {e}")
 
-    with tab1:
-        uploaded_file = st.file_uploader("파일 선택 (CSV/Excel)", type=["csv", "xlsx"])
-        if uploaded_file:
-            try:
-                if uploaded_file.name.endswith('.csv'):
-                    df, enc = load_csv_safe(uploaded_file)
-                else:
-                    df = pd.read_excel(uploaded_file)
-                
-                if df is not None:
-                    st.session_state.data["merged"] = df.reset_index(drop=True)
-                    st.success(f"업로드 성공 ({len(df)}행)")
-                else:
-                    st.error("파일을 읽을 수 없습니다.")
-            except Exception as e:
-                st.error(f"에러: {e}")
-
-    with tab2:
-        if st.button("기본 데이터 사용"):
-            st.info("기본 데이터 기능은 데모 파일이 서버에 있어야 작동합니다.")
-
-    if st.session_state.data["merged"] is not None:
-        st.dataframe(st.session_state.data["merged"].head())
-
-# Step 2: 시각화
+# [Step 2] 시각화
 elif st.session_state.step == 2:
     st.subheader("📊 데이터 시각화")
     if st.session_state.data["merged"] is None:
         st.warning("데이터를 먼저 업로드하세요.")
     else:
         df = st.session_state.data["merged"]
-        all_cols = df.columns.tolist()
-        
         col1, col2 = st.columns(2)
-        with col1:
-            x_var = st.selectbox("X축", options=all_cols)
-        with col2:
-            y_var = st.selectbox("Y축 (수치형 권장)", options=["없음"] + all_cols)
-            
-        if y_var != "없음":
-            try:
-                fig = px.scatter(df, x=x_var, y=y_var, title=f"{x_var} vs {y_var}")
-                st.plotly_chart(fig, width='stretch')
-            except:
-                st.error("해당 변수 조합으로 그래프를 그릴 수 없습니다.")
+        x_axis = col1.selectbox("X축 선택", df.columns)
+        y_axis = col2.selectbox("Y축 선택", ["없음"] + list(df.columns))
+        
+        if st.button("그래프 그리기"):
+            if y_axis != "없음":
+                fig = px.scatter(df, x=x_axis, y=y_axis, title=f"{x_axis} vs {y_axis}")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.bar_chart(df[x_axis].value_counts())
 
-# Step 3: 데이터 전처리 (개선된 로직)
+# [Step 3] 전처리 (안전장치 강화됨)
 elif st.session_state.step == 3:
     st.subheader("🧹 데이터 전처리")
-    
     if st.session_state.data["merged"] is None:
-        st.warning("⚠️ 먼저 '데이터 업로드' 단계를 완료하세요.")
+        st.warning("데이터를 먼저 업로드하세요.")
     else:
-        df_origin = st.session_state.data["merged"].copy()
-        all_cols = df_origin.columns.tolist()
-
-        col1, col2 = st.columns(2)
-        with col1:
-            target_col = st.selectbox("🎯 타겟 변수 (Y)", options=all_cols)
+        df = st.session_state.data["merged"].copy()
         
-        feature_candidates = [c for c in all_cols if c != target_col]
-        with col2:
-            selected_features = st.multiselect("📋 입력 변수 (X)", options=feature_candidates, default=feature_candidates[:5])
+        # 변수 선택
+        c1, c2 = st.columns(2)
+        target = c1.selectbox("타겟 변수 (Y)", df.columns)
+        feats = c2.multiselect("입력 변수 (X)", [c for c in df.columns if c != target])
         
-        if st.button("🚀 전처리 실행", type="primary"):
-            if not selected_features:
-                st.error("입력 변수를 선택해주세요.")
+        if st.button("🚀 전처리 실행"):
+            if not feats:
+                st.error("입력 변수를 하나 이상 선택하세요.")
             else:
-                with st.spinner("처리 중..."):
-                    try:
-                        clean_df = df_origin.dropna(subset=[target_col]).reset_index(drop=True)
-                        X = clean_df[selected_features].copy()
-                        y = clean_df[target_col].copy()
-
-                        # 1. 무한대 처리
-                        X = X.replace([np.inf, -np.inf], np.nan)
-
-                        # 2. 타겟 인코딩
-                        le_target = None
-                        if st.session_state.task == "logit" and y.dtype == 'object':
-                            le_target = LabelEncoder()
-                            y = pd.Series(le_target.fit_transform(y), index=y.index)
-
-                        num_cols = X.select_dtypes(include=['number']).columns.tolist()
-                        cat_cols = X.select_dtypes(exclude=['number']).columns.tolist()
-
-                        imputer = SimpleImputer(strategy='mean')
-                        scaler = StandardScaler()
-                        encoders = {}
-                        cat_modes = {}
-
-                        # 3. 수치형 처리
-                        if num_cols:
-                            X_imputed = imputer.fit_transform(X[num_cols])
-                            X_scaled = scaler.fit_transform(X_imputed)
-                            X[num_cols] = pd.DataFrame(X_scaled, columns=num_cols, index=X.index)
-
-                        # 4. 범주형 처리 (안전장치 포함)
-                        for col in cat_cols:
-                            X[col] = X[col].fillna("Unknown").astype(str)
-                            # 최빈값 저장
-                            mode_val = X[col].mode()[0]
-                            cat_modes[col] = mode_val
-                            
-                            le = LabelEncoder()
-                            trans = le.fit_transform(X[col])
-                            X[col] = pd.Series(trans, index=X.index)
-                            encoders[col] = le
-
-                        final_features = num_cols + cat_cols
-                        X = X[final_features]
-
-                        st.session_state.preprocess.update({
-                            "feature_cols": final_features,
-                            "imputer": imputer if num_cols else None,
-                            "scaler": scaler if num_cols else None,
-                            "encoders": encoders,
-                            "cat_modes": cat_modes,
-                            "num_cols": num_cols,
-                            "cat_cols": cat_cols,
-                            "target_encoder": le_target
-                        })
+                try:
+                    # 1. 타겟 결측치 제거
+                    df = df.dropna(subset=[target]).reset_index(drop=True)
+                    
+                    # 2. X, y 분리
+                    X = df[feats].copy()
+                    y = df[target].copy()
+                    
+                    # 3. 무한대(Inf)값 제거 (X와 y 모두)
+                    X = X.replace([np.inf, -np.inf], np.nan)
+                    
+                    # y가 수치형일 경우 무한대 체크
+                    if np.issubdtype(y.dtype, np.number):
+                        y = y.replace([np.inf, -np.inf], np.nan)
+                        # y에 NaN이 생기면 해당 행 제거
+                        valid_idx = y.notna() & X.notna().all(axis=1) # 엄격한 기준
+                        X = X[valid_idx]
+                        y = y[valid_idx]
+                    
+                    # 4. 수치형/범주형 구분
+                    num_cols = X.select_dtypes(include=['number']).columns.tolist()
+                    cat_cols = X.select_dtypes(exclude=['number']).columns.tolist()
+                    
+                    # 5. 수치형 처리 (Impute + Scale)
+                    imputer = SimpleImputer(strategy='mean')
+                    scaler = StandardScaler()
+                    if num_cols:
+                        X[num_cols] = scaler.fit_transform(imputer.fit_transform(X[num_cols]))
+                    
+                    # 6. 범주형 처리 (최빈값 저장 + LabelEncoding)
+                    encoders = {}
+                    cat_modes = {}
+                    for col in cat_cols:
+                        X[col] = X[col].fillna("Unknown").astype(str)
+                        cat_modes[col] = X[col].mode()[0] # 최빈값 저장
+                        le = LabelEncoder()
+                        X[col] = le.fit_transform(X[col])
+                        encoders[col] = le
                         
-                        st.session_state.data["X_processed"] = X
-                        st.session_state.data["y_processed"] = y
-                        st.success("완료!")
-                        st.dataframe(X.head())
+                    # 7. 타겟 인코딩 (분류 문제일 때)
+                    le_target = None
+                    if st.session_state.task == "logit" and y.dtype == 'object':
+                        le_target = LabelEncoder()
+                        y = le_target.fit_transform(y)
+                        
+                    # 상태 저장
+                    st.session_state.preprocess = {
+                        "feature_cols": feats, "num_cols": num_cols, "cat_cols": cat_cols,
+                        "imputer": imputer, "scaler": scaler, "encoders": encoders, 
+                        "cat_modes": cat_modes, "target_encoder": le_target
+                    }
+                    st.session_state.data["X_processed"] = X
+                    st.session_state.data["y_processed"] = y
+                    
+                    st.success("전처리 완료!")
+                    st.dataframe(X.head())
+                    
+                except Exception as e:
+                    st.error(f"전처리 오류: {e}")
 
-                    except Exception as e:
-                        st.error(f"오류: {e}")
-
-# Step 4: 모델 학습
+# [Step 4] 모델 학습
 elif st.session_state.step == 4:
     st.subheader("🚀 모델 학습")
-    if "X_processed" in st.session_state.data:
+    if "X_processed" not in st.session_state.data:
+        st.warning("전처리를 먼저 수행하세요.")
+    else:
         X = st.session_state.data["X_processed"]
         y = st.session_state.data["y_processed"]
         
-        test_size = st.slider("테스트 비율", 0.1, 0.4, 0.2)
-        
         if st.button("학습 시작"):
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
             
             if st.session_state.task == "logit":
                 m1 = LogisticRegression(max_iter=1000)
-                m2 = DecisionTreeClassifier(max_depth=10)
+                m2 = DecisionTreeClassifier(max_depth=5)
             else:
                 m1 = LinearRegression()
-                m2 = DecisionTreeRegressor(max_depth=10)
-            
+                m2 = DecisionTreeRegressor(max_depth=5)
+                
             m1.fit(X_train, y_train)
             m2.fit(X_train, y_train)
             
             st.session_state.models["regression"] = m1
             st.session_state.models["decision_tree"] = m2
-            st.session_state.data.update({"X_test": X_test, "y_test": y_test})
+            st.session_state.data["test_set"] = (X_test, y_test)
             st.success("학습 완료!")
-    else:
-        st.warning("전처리를 먼저 진행하세요.")
 
-# Step 5: 모델 예측 (Step 3와 로직 일치화)
+# [Step 5] 예측
 elif st.session_state.step == 5:
-    st.subheader("🎯 모델 예측")
-    
+    st.subheader("🎯 예측 및 평가")
     if st.session_state.models["regression"] is None:
-        st.warning("모델 학습을 먼저 진행하세요.")
+        st.warning("모델을 먼저 학습하세요.")
     else:
-        def predict_pipeline(input_df):
-            pre = st.session_state.preprocess
-            X = input_df.copy()
+        # 평가 결과
+        if "test_set" in st.session_state.data:
+            X_test, y_test = st.session_state.data["test_set"]
+            m1 = st.session_state.models["regression"]
+            m2 = st.session_state.models["decision_tree"]
             
-            # 1. 컬럼 채우기
-            for col in pre["feature_cols"]:
-                if col not in X.columns:
-                    X[col] = 0
-            
-            # 2. 수치형
-            if pre["num_cols"] and pre["imputer"]:
-                for c in pre["num_cols"]:
-                    X[c] = pd.to_numeric(X[c], errors='coerce')
-                X_num = pre["imputer"].transform(X[pre["num_cols"]])
-                X_num = pre["scaler"].transform(X_num)
-                X[pre["num_cols"]] = pd.DataFrame(X_num, columns=pre["num_cols"], index=X.index)
-            
-            # 3. 범주형 (Step 3의 최빈값 활용)
-            for col in pre["cat_cols"]:
-                encoder = pre["encoders"][col]
-                mode_val = pre["cat_modes"][col] # 저장해둔 최빈값
-                classes = set(encoder.classes_)
-                
-                # 없는 값은 최빈값으로 대체하는 함수
-                def safe_map(val):
-                    s_val = str(val)
-                    return s_val if s_val in classes else mode_val
-                
-                X[col] = X[col].fillna("Unknown").apply(safe_map)
-                X[col] = encoder.transform(X[col])
-            
-            X = X[pre["feature_cols"]]
-            
-            reg = st.session_state.models["regression"]
-            dt = st.session_state.models["decision_tree"]
-            w = st.session_state.models["mixed_weights"]
+            pred1 = m1.predict(X_test)
+            pred2 = m2.predict(X_test)
             
             if st.session_state.task == "logit":
-                p1 = reg.predict_proba(X)[:, 1]
-                p2 = dt.predict_proba(X)[:, 1]
-                final_p = w["regression"]*p1 + w["decision_tree"]*p2
-                return (final_p >= 0.5).astype(int), final_p
+                score1 = accuracy_score(y_test, pred1)
+                score2 = accuracy_score(y_test, pred2)
+                st.write(f"### 정확도: 회귀({score1:.2f}), 트리({score2:.2f})")
             else:
-                p1 = reg.predict(X)
-                p2 = dt.predict(X)
-                return w["regression"]*p1 + w["decision_tree"]*p2, None
+                score1 = r2_score(y_test, pred1)
+                score2 = r2_score(y_test, pred2)
+                st.write(f"### R2 Score: 회귀({score1:.2f}), 트리({score2:.2f})")
 
-        # 입력 UI
-        mode = st.radio("입력 방식", ["직접 입력", "파일 업로드"])
-        if mode == "직접 입력":
-            with st.form("input"):
-                st.markdown("값을 입력하세요 (범주형은 텍스트 입력)")
-                input_data = {}
-                cols = st.columns(3)
-                for i, col in enumerate(st.session_state.preprocess["feature_cols"]):
-                    with cols[i % 3]:
-                        if col in st.session_state.preprocess["num_cols"]:
-                            input_data[col] = st.number_input(col, value=0.0)
-                        else:
-                            # 기존에 학습된 클래스 보여주기
-                            classes = st.session_state.preprocess["encoders"][col].classes_
-                            input_data[col] = st.selectbox(col, options=classes)
+        st.divider()
+        st.write("#### 🔮 새로운 데이터 예측")
+        
+        # 입력 폼 생성
+        pre = st.session_state.preprocess
+        with st.form("pred_form"):
+            inputs = {}
+            cols = st.columns(3)
+            for i, col in enumerate(pre["feature_cols"]):
+                with cols[i % 3]:
+                    if col in pre["num_cols"]:
+                        inputs[col] = st.number_input(col, value=0.0)
+                    else:
+                        opts = list(pre["encoders"][col].classes_)
+                        inputs[col] = st.selectbox(col, opts)
+            
+            if st.form_submit_button("예측하기"):
+                # 입력 데이터프레임 생성
+                input_df = pd.DataFrame([inputs])
                 
-                if st.form_submit_button("예측"):
-                    df_in = pd.DataFrame([input_data])
-                    pred, prob = predict_pipeline(df_in)
-                    st.success(f"결과: {pred[0]}")
-                    if prob is not None:
-                        st.info(f"확률: {prob[0]:.2%}")
-        else:
-            up = st.file_uploader("CSV 업로드", type=["csv"])
-            if up and st.button("일괄 예측"):
-                df_batch = pd.read_csv(up)
-                pred, prob = predict_pipeline(df_batch)
-                df_batch["Prediction"] = pred
-                st.dataframe(df_batch)
-
-# Step 6: 평가
-elif st.session_state.step == 6:
-    st.subheader("📈 성능 평가")
-    if "X_test" in st.session_state.data:
-        X_test = st.session_state.data["X_test"]
-        y_test = st.session_state.data["y_test"]
-        
-        # 간단한 평가 로직 재현
-        reg = st.session_state.models["regression"]
-        dt = st.session_state.models["decision_tree"]
-        
-        if st.session_state.task == "logit":
-            acc1 = accuracy_score(y_test, reg.predict(X_test))
-            acc2 = accuracy_score(y_test, dt.predict(X_test))
-            st.write(f"회귀 정확도: {acc1:.2f}, 트리 정확도: {acc2:.2f}")
-        else:
-            r2_1 = r2_score(y_test, reg.predict(X_test))
-            r2_2 = r2_score(y_test, dt.predict(X_test))
-            st.write(f"회귀 R2: {r2_1:.2f}, 트리 R2: {r2_2:.2f}")
-    else:
-        st.warning("학습을 먼저 진행하세요.")
+                # 전처리 파이프라인 적용
+                X_new = input_df.copy()
+                
+                # 수치형 변환
+                if pre["num_cols"]:
+                    X_new[pre["num_cols"]] = pre["scaler"].transform(pre["imputer"].transform(X_new[pre["num_cols"]]))
+                
+                # 범주형 변환 (Safe Mode)
+                for col in pre["cat_cols"]:
+                    mode_val = pre["cat_modes"][col]
+                    encoder = pre["encoders"][col]
+                    classes = set(encoder.classes_)
+                    # 모르는 값은 최빈값으로 대체
+                    X_new[col] = X_new[col].apply(lambda x: x if x in classes else mode_val)
+                    X_new[col] = encoder.transform(X_new[col])
+                
+                # 예측 수행
+                m1 = st.session_state.models["regression"]
+                m2 = st.session_state.models["decision_tree"]
+                
+                if st.session_state.task == "logit":
+                    p1 = m1.predict_proba(X_new)[:, 1]
+                    p2 = m2.predict_proba(X_new)[:, 1]
+                    final_p = (p1 + p2) / 2
+                    res = "성공 (1)" if final_p[0] >= 0.5 else "실패 (0)"
+                    st.info(f"예측 결과: **{res}** (확률: {final_p[0]:.2%})")
+                else:
+                    p1 = m1.predict(X_new)
+                    p2 = m2.predict(X_new)
+                    final_v = (p1 + p2) / 2
+                    st.info(f"예측 결과: **{final_v[0]:.2f}**")
